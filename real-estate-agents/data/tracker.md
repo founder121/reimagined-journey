@@ -21,3 +21,5 @@ Format: `- ISO_TIMESTAMP | Agent N | description`
 - 2026-05-27T18:07:59.644Z | Agent 4 | Marketing content generated for 3/3 deal(s)
 - 2026-05-27T18:08:26.629Z | Agent 4 | Marketing content generated for 3/3 deal(s)
 - 2026-05-27T18:10:52.025Z | Agent 4 | Marketing content generated for 3/3 deal(s)
+- 2026-05-27T19:10:25.514Z | Web UI voice | agent1 | source: voice | "dry run scan"
+- 2026-05-27T19:10:43.177Z | Web UI voice | agent1 | source: voice | "dry run scan"

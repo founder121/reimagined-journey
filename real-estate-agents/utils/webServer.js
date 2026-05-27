@@ -178,7 +178,7 @@ app.get('/api/status', (_req, res) => {
       marketing = fs.readdirSync(OUTPUTS_DIR).filter(d => d.startsWith('marketing-')).length;
     }
 
-    res.json({ listings, rawLeads, qualified, pipeline, marketing });
+    res.json({ listings, leads: rawLeads, qualified, pipeline, marketing });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -224,6 +224,13 @@ app.post('/api/voice', async (req, res) => {
   }
 
   log.info(`[voice] ${agentId} — "${transcript.slice(0, 80)}"`);
+
+  // Log voice interactions to tracker.md (source: "voice")
+  try {
+    const line = `- ${new Date().toISOString()} | Web UI voice | ${agentId} | source: voice | "${transcript.slice(0, 120)}"\n`;
+    fs.appendFileSync(path.join(DATA_DIR, 'tracker.md'), line, 'utf8');
+  } catch (_) { /* best effort */ }
+
   await handleChat(agentId, transcript.trim(), res);
 });
 

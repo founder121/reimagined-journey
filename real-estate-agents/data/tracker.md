@@ -23,3 +23,8 @@ Format: `- ISO_TIMESTAMP | Agent N | description`
 - 2026-05-27T18:10:52.025Z | Agent 4 | Marketing content generated for 3/3 deal(s)
 - 2026-05-27T19:10:25.514Z | Web UI voice | agent1 | source: voice | "dry run scan"
 - 2026-05-27T19:10:43.177Z | Web UI voice | agent1 | source: voice | "dry run scan"
+- 2026-05-27T23:24:43.142Z | Agent 5 | cm2Bridge | push started | score_min=5
+- 2026-05-27T23:25:00.572Z | Agent 5 | cm2Bridge | push started | score_min=5
+- 2026-05-27T23:25:13.236Z | Agent 5 | cm2Bridge | push failed | {A1B2C3D4-E5F6-7890-ABCD-EF1234567890} | HTTP 403
+- 2026-05-27T23:25:44.821Z | Agent 5 | cm2Bridge | push failed | {B2C3D4E5-F6A7-8901-BCDE-F12345678901} | HTTP 403
+- 2026-05-27T23:25:45.822Z | Agent 5 | cm2Bridge | push complete | pushed=0 duplicates=0 skipped=6 failed=2

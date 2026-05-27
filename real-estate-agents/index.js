@@ -37,6 +37,14 @@ const analyst   = require('./agents/agent3-analyst');
 const marketing = require('./agents/agent4-marketing');
 const sales     = require('./agents/agent5-sales');
 
+// ── CM2 Bridge ────────────────────────────────────────────────────────────────
+const {
+  commandPush,
+  commandStatus: cm2Status,
+  commandSync,
+  commandWhatsapp,
+} = require('./utils/cm2Bridge');
+
 // ── Error handler ─────────────────────────────────────────────────────────────
 /**
  * Wrap a Commander action so unhandled errors print a clean message,
@@ -666,6 +674,30 @@ program
     }
     console.log(`   → data/leads/qualified/qualified-${todayStr()}.csv\n`);
   }));
+
+// ── sc push ───────────────────────────────────────────────────────────────────
+program
+  .command('push')
+  .description('CM2 Bridge — push qualified leads to thecm2.com')
+  .action(handle(async () => { await commandPush(); }));
+
+// ── sc cm2status ──────────────────────────────────────────────────────────────
+program
+  .command('cm2status')
+  .description('CM2 Bridge — show live CM2 engine stats')
+  .action(handle(async () => { await cm2Status(); }));
+
+// ── sc sync ───────────────────────────────────────────────────────────────────
+program
+  .command('sync')
+  .description('CM2 Bridge — sync CM2 replies back into SC pipeline')
+  .action(handle(async () => { await commandSync(); }));
+
+// ── sc whatsapp ───────────────────────────────────────────────────────────────
+program
+  .command('whatsapp')
+  .description('CM2 Bridge — trigger WhatsApp follow-up for contacted leads')
+  .action(handle(async () => { await commandWhatsapp(); }));
 
 // ── Parse ─────────────────────────────────────────────────────────────────────
 program.parse(process.argv);

@@ -28,6 +28,7 @@ const fs           = require('fs');
 
 const createLogger = require('./logger');
 const { DATA_DIR, OUTPUTS_DIR, listFiles } = require('./fileStore');
+const { loadPushLog } = require('./cm2Bridge');
 
 const scout     = require('../agents/agent1-crawler');
 const finder    = require('../agents/agent2-leads');
@@ -181,6 +182,87 @@ app.get('/api/status', (_req, res) => {
     res.json({ listings, leads: rawLeads, qualified, pipeline, marketing });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/cm2-status', (_req, res) => {
+  try {
+    const pushLog   = loadPushLog();
+    const entries   = Object.values(pushLog);
+    const sent      = entries.filter(e => e.status === 'pushed_to_cm2').length;
+    const replies   = entries.filter(e => e.status === 'replied_in_cm2').length;
+    const failed    = entries.filter(e => e.status === 'push_failed').length;
+    const duplicate = entries.filter(e => e.status === 'duplicate_in_cm2').length;
+    res.json({ sent, replies, failed, duplicate, total: entries.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/status', (_req, res) => {
+  try {
+    const listings  = safeListFiles('raw').length;
+    const rawLeads  = safeListFiles('leads/raw').length;
+    const pushLog   = loadPushLog();
+    const entries   = Object.values(pushLog);
+    const cm2Sent   = entries.filter(e => e.status === 'pushed_to_cm2').length;
+    const cm2Reply  = entries.filter(e => e.status === 'replied_in_cm2').length;
+
+    // Tracker.md last 10 lines
+    let trackerLines = [];
+    const trackerPath = path.join(DATA_DIR, 'tracker.md');
+    if (fs.existsSync(trackerPath)) {
+      trackerLines = fs.readFileSync(trackerPath, 'utf8')
+        .split('\n').filter(Boolean).slice(-10);
+    }
+
+    // Push log summary
+    const byStatus = {};
+    for (const e of entries) byStatus[e.status] = (byStatus[e.status] || 0) + 1;
+
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta http-equiv="refresh" content="60"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SC Agent Pipeline — Status</title>
+<style>
+  body{background:#0d1117;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;padding:24px;max-width:860px;margin:0 auto}
+  h1{color:#c9a84c;font-size:20px;margin-bottom:4px}
+  h2{color:#8a6f2f;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin:24px 0 8px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px}
+  .stat{background:#161c27;border:1px solid #2d3558;border-radius:8px;padding:12px;text-align:center}
+  .stat-n{font-size:28px;font-weight:700;color:#c9a84c;display:block}
+  .stat-l{font-size:11px;color:#6b7280}
+  pre{background:#161c27;border:1px solid #2d3558;border-radius:6px;padding:12px;font-size:12px;overflow-x:auto;white-space:pre-wrap;color:#e2e8f0}
+  .refresh{font-size:11px;color:#4b5563;margin-top:20px}
+</style>
+</head>
+<body>
+<h1>Square Centimeter — Agent Pipeline Status</h1>
+<p style="color:#4b5563;font-size:12px">Auto-refresh every 60s · ${new Date().toISOString()}</p>
+
+<h2>Pipeline Summary</h2>
+<div class="grid">
+  <div class="stat"><span class="stat-n">${listings}</span><span class="stat-l">Listings scanned</span></div>
+  <div class="stat"><span class="stat-n">${rawLeads}</span><span class="stat-l">Lead files</span></div>
+  <div class="stat"><span class="stat-n">${cm2Sent}</span><span class="stat-l">Pushed to CM2</span></div>
+  <div class="stat"><span class="stat-n">${cm2Reply}</span><span class="stat-l">CM2 replies</span></div>
+</div>
+
+<h2>CM2 Push Log</h2>
+<pre>${Object.entries(byStatus).map(([s, n]) => `${s.padEnd(25)} ${n}`).join('\n') || '(empty)'}</pre>
+
+<h2>Recent Activity (tracker.md)</h2>
+<pre>${trackerLines.map(l => l.replace(/</g, '&lt;')).join('\n') || '(no entries yet)'}</pre>
+
+<p class="refresh">Page auto-refreshes every 60 seconds.</p>
+</body>
+</html>`);
+  } catch (err) {
+    res.status(500).send(`<pre>Error: ${err.message}</pre>`);
   }
 });
 

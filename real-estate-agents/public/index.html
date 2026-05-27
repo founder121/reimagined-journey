@@ -661,6 +661,14 @@
           <span class="pipeline-stat-n" id="stat-marketing">—</span>
           <span class="pipeline-stat-l">Mktg packs</span>
         </div>
+        <div class="pipeline-stat">
+          <span class="pipeline-stat-n" id="stat-cm2-sent">—</span>
+          <span class="pipeline-stat-l">CM2 sent</span>
+        </div>
+        <div class="pipeline-stat">
+          <span class="pipeline-stat-n" id="stat-cm2-replies">—</span>
+          <span class="pipeline-stat-l">CM2 replies</span>
+        </div>
       </div>
     </div>
   </aside>
@@ -800,14 +808,19 @@ async function loadStatus() {
   try {
     const s = await fetch('/api/status').then(r => r.json());
     document.getElementById('stat-listings').textContent  = s.listings  ?? '—';
-    document.getElementById('stat-leads').textContent     = s.rawLeads  ?? '—';
+    document.getElementById('stat-leads').textContent     = s.leads     ?? '—';
     document.getElementById('stat-qualified').textContent = s.qualified ?? '—';
     document.getElementById('stat-marketing').textContent = s.marketing ?? '—';
     document.getElementById('status-text').textContent =
-      `${s.listings} listing(s) · ${s.rawLeads} lead file(s)`;
+      `${s.listings} listing(s) · ${s.leads} lead file(s)`;
   } catch (e) {
     document.getElementById('status-text').textContent = 'Server connected';
   }
+  try {
+    const c = await fetch('/api/cm2-status').then(r => r.json());
+    document.getElementById('stat-cm2-sent').textContent    = c.sent    ?? '—';
+    document.getElementById('stat-cm2-replies').textContent = c.replies ?? '—';
+  } catch (_) {}
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────────

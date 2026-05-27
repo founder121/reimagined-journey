@@ -7,11 +7,15 @@
     "realestate": "./index.js"
   },
   "scripts": {
-    "start":  "node utils/webServer.js",
-    "cli":    "node index.js",
-    "test":   "jest --coverage",
-    "lint":   "eslint agents/ utils/ index.js",
-    "status": "node index.js status"
+    "start":     "node utils/webServer.js",
+    "cli":       "node index.js",
+    "test":      "jest --coverage",
+    "lint":      "eslint agents/ utils/ index.js",
+    "status":    "node index.js status",
+    "pump":      "node --env-file=.env utils/leadPump.js",
+    "briefing":  "node --env-file=.env utils/julianBriefing.js",
+    "hq":        "node --env-file=.env utils/commandCore.js",
+    "start:all": "node --env-file=.env utils/webServer.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

@@ -292,6 +292,60 @@ sources:
       - naturesOfControl
       - source: "companies-house-psc"
 
+  # ──────────────────────────────────────────────────────────
+  # HMLR UK-Wide — Price Paid, 4 parallel queries
+  # No date filter; maximum volume; UK-wide + PCL focus.
+  # Processed by fetchHMLRUKWide() in agent2-leads.js which
+  # runs queries A (high-value UK-wide), B (PCL per-postcode),
+  # C (new builds), D (leasehold flats) via Promise.allSettled.
+  # ──────────────────────────────────────────────────────────
+  hmlr_uk_wide:
+    enabled: true
+    type: cash_buyer
+    description: "HMLR Price Paid — UK-wide, 4 parallel queries, no date filter, maximum volume"
+    apiUrl: "https://landregistry.data.gov.uk/data/ppi/transaction-record.json"
+    rateLimit: 1.0
+    maxRecords: 2000
+    dedupeKey: "transactionId"
+    queries:
+      A:
+        label: "high-value UK-wide"
+        params:
+          pricePaid-min: 500000
+          _view: basic
+          _pageSize: 100
+          _format: json
+          _output: none
+      B:
+        label: "PCL per-postcode (sequential)"
+        postcodes: [SW1, SW3, SW7, SW10, W1, W8, WC2, EC1, E1W]
+        params:
+          pricePaid-min: 500000
+          _view: basic
+          _pageSize: 100
+          _format: json
+          _output: none
+      C:
+        label: "new builds UK-wide"
+        params:
+          newBuild: "Y"
+          pricePaid-min: 300000
+          _view: basic
+          _pageSize: 100
+          _format: json
+          _output: none
+      D:
+        label: "leasehold flats UK-wide"
+        params:
+          propertyType: "F"
+          estateType: "L"
+          pricePaid-min: 400000
+          _view: basic
+          _pageSize: 100
+          _format: json
+          _output: none
+    outputFile: "data/leads/raw/leads-hmlr-uk-wide-{date}.csv"
+
 # ============================================================
 # Global lead-source defaults
 # ============================================================

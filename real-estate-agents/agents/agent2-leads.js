@@ -4,31 +4,16 @@
  * ════════════════════════════════════════════════════════════════════════════
  * Square Centimeter Ltd | squarecentimeter.co.uk
  *
- * Identifies and scores high-net-worth investor leads from public sources:
- *   • HM Land Registry Price Paid Data API (cash buyer identification)
- *   • Companies House API (SPV/property holding companies, PSC register)
- *   • LinkedIn public search (HNW investors with London property signals)
- *   • Property press (named deal participants in public articles)
- *   • Expat & non-dom community forums (optional, off by default)
+ * Sources:
+ *   • HMLR UK-Wide Price Paid (hmlr_uk_wide) — 4 parallel queries, full UK
+ *   • HM Land Registry PCL/POL (land_registry_price_paid) — legacy PCL focus
+ *   • Companies House API
+ *   • LinkedIn public search
+ *   • Property press
+ *   • Expat forums
  *
- * All data is from publicly accessible sources only. No login-gated,
- * paywalled, or private data is ever accessed.
- *
- * Lead scoring (see CLAUDE.md § Lead Scoring Weights):
- *   investment_intent_signal  40%
- *   capital_capacity          25%
- *   accessibility             20%
- *   strategic_fit             15%
- *
- * Output:
- *   data/leads/raw/leads-YYYY-MM-DD.csv
- *   data/leads/raw/leads-YYYY-MM-DD.json
- *   data/tracker.md  (appended)
- *
- * Usage:
- *   const finder = require('./agent2-leads');
- *   const leads = await finder.run({ source: 'land_registry_price_paid' });
- *   const leads = await finder.runAll({ type: 'cash_buyer', limit: 100 });
+ * Lead scoring: investment_intent_signal 40%, capital_capacity 25%,
+ *               accessibility 20%, strategic_fit 15%
  */
 
 const axios   = require('axios');
@@ -47,31 +32,35 @@ const log           = createLogger('agent2-leads');
 const AGENT_VERSION = '1.0.0';
 const CONFIG_PATH   = path.resolve(__dirname, '..', 'config', 'lead-sources.yml');
 
-// Lead status lifecycle values
 const LEAD_STATUSES = ['new', 'contacted', 'responded', 'meeting_booked', 'converted', 'dead'];
 
-// CSV column order matches CLAUDE.md spec
 const CSV_HEADERS = [
   'name', 'company', 'nationality', 'property_interest', 'budget_range',
   'contact_email', 'contact_phone', 'linkedin_url', 'motivation',
   'lead_score', 'source_url', 'date_found', 'status',
-  // Internal enrichment
   'type', 'sourceKey', 'capturedAt', 'agentVersion',
   'score_intent', 'score_capacity', 'score_accessibility', 'score_fit',
   'flags',
 ];
 
+// ── HMLR UK-Wide constants ────────────────────────────────────────────────────
+
+const PCL_DISTRICTS = new Set(['SW1', 'SW3', 'SW7', 'SW10', 'W1', 'W8', 'WC2', 'EC1', 'E1W']);
+
+const VALID_CM2_BUDGETS = new Set(['£250k–£500k', '£500k–£1M', '£1M–£3M', '£3M+']);
+
+const HMLR_CSV_HEADERS = [
+  'transactionId', 'name', 'property_address', 'postcode',
+  'pcl', 'asset_class', 'tenure', 'price', 'budget_range',
+  'motivation_signal', 'motivation_score', 'lead_score',
+  'mandate_interest', 'date_found', 'source_url', 'status',
+];
+
+const HMLR_BASE = 'https://landregistry.data.gov.uk/data/ppi/transaction-record.json';
+const PCL_POSTCODES = ['SW1', 'SW3', 'SW7', 'SW10', 'W1', 'W8', 'WC2', 'EC1', 'E1W'];
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/**
- * Run a single named lead source.
- *
- * @param {object}  opts
- * @param {string}  opts.source     Source key from lead-sources.yml
- * @param {number}  [opts.limit]    Max records to collect
- * @param {boolean} [opts.dryRun]   Validate config only
- * @returns {Promise<object[]>}
- */
 async function run({ source, limit, dryRun = false } = {}) {
   const config    = loadConfig();
   const sourceKey = resolveSourceKey(config, source);
@@ -103,9 +92,16 @@ async function run({ source, limit, dryRun = false } = {}) {
   log.info(`Source "${sourceKey}": ${leads.length} leads after dedup & scoring`);
 
   if (leads.length > 0) {
-    const date = todayStr();
-    writeData('leads/raw', `leads-${sourceKey}-${date}`, leads);
-    writeCsv('leads/raw', `leads-${sourceKey}-${date}`, leads);
+    if (sourceKey === 'hmlr_uk_wide') {
+      // HMLR uses ISO timestamp filename and special CSV headers
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      writeData('leads/raw', `leads-hmlr-${timestamp}`, leads);
+      writeHMLRCsv('leads/raw', `leads-hmlr-${timestamp}`, leads);
+    } else {
+      const date = todayStr();
+      writeData('leads/raw', `leads-${sourceKey}-${date}`, leads);
+      writeCsv('leads/raw', `leads-${sourceKey}-${date}`, leads);
+    }
     appendTracker(`Agent 2 — source "${sourceKey}" — ${leads.length} leads found`);
     maybeUpdatePipeline(leads);
   }
@@ -113,15 +109,6 @@ async function run({ source, limit, dryRun = false } = {}) {
   return leads;
 }
 
-/**
- * Run all enabled sources of a given type.
- *
- * @param {object}  opts
- * @param {string}  opts.type     Lead type (cash_buyer, developer, hnw_investor, …)
- * @param {number}  [opts.limit]  Per-source record cap
- * @param {boolean} [opts.dryRun]
- * @returns {Promise<object[]>}   Merged, deduped results from all matching sources
- */
 async function runAll({ type, limit, dryRun = false } = {}) {
   const config = loadConfig();
   const keys   = Object.entries(config.sources)
@@ -141,7 +128,7 @@ async function runAll({ type, limit, dryRun = false } = {}) {
   for (const key of keys) {
     const srcLeads = await run({ source: key, limit, dryRun });
     for (const lead of srcLeads) {
-      const dedupeVal = lead.linkedin_url ?? lead.source_url ?? lead.name;
+      const dedupeVal = lead.transactionId ?? lead.linkedin_url ?? lead.source_url ?? lead.name;
       if (dedupeVal && seen.has(dedupeVal)) continue;
       if (dedupeVal) seen.add(dedupeVal);
       allLeads.push(lead);
@@ -157,10 +144,6 @@ async function runAll({ type, limit, dryRun = false } = {}) {
   return allLeads;
 }
 
-/**
- * Return metadata for all configured lead sources (for the `sc list` command).
- * @param {boolean} [enabledOnly=false]
- */
 function listSources(enabledOnly = false) {
   const config = loadConfig();
   return Object.entries(config.sources)
@@ -178,11 +161,15 @@ function listSources(enabledOnly = false) {
 // ── Source dispatchers ────────────────────────────────────────────────────────
 
 async function fetchSource(sourceKey, srcCfg, config, limit) {
+  // HMLR UK-Wide: self-contained (own dedup, scoring, output format)
+  if (sourceKey === 'hmlr_uk_wide') {
+    return fetchHMLRUKWide(srcCfg, config.defaults || {}, limit);
+  }
+
   const defaults = config.defaults || {};
   const weights  = config.lead_score_weights || defaultWeights();
 
-  // Existing leads for deduplication
-  const dedupeKey  = srcCfg.dedupeKey ?? defaults.dedupeKey ?? 'source_url';
+  const dedupeKey    = srcCfg.dedupeKey ?? defaults.dedupeKey ?? 'source_url';
   const existingKeys = loadExistingDedupeKeys(dedupeKey);
 
   let rawLeads = [];
@@ -210,11 +197,9 @@ async function fetchSource(sourceKey, srcCfg, config, limit) {
       break;
 
     default:
-      // Generic HTML scraper fallback
       rawLeads = await fetchGeneric(sourceKey, srcCfg, defaults, limit);
   }
 
-  // Dedupe against prior runs
   const fresh = rawLeads.filter((lead) => {
     const k = lead[dedupeKey] ?? lead.source_url;
     if (!k || existingKeys.has(k)) return false;
@@ -222,11 +207,365 @@ async function fetchSource(sourceKey, srcCfg, config, limit) {
     return true;
   });
 
-  // Score and attach metadata
   return fresh.map((lead) => enrichLead(lead, sourceKey, srcCfg, weights));
 }
 
-// ── HM Land Registry Price Paid Data ─────────────────────────────────────────
+// ── HMLR UK-Wide (4 parallel queries) ────────────────────────────────────────
+
+async function fetchHMLRUKWide(srcCfg, defaults, limit) {
+  log.info('[HMLR UK-Wide] Starting 4 parallel queries…');
+  const timeout = defaults.timeout ?? 30_000;
+
+  const seenIds   = loadHMLRDedupeKeys();
+  const queryResults = { queryA: 0, queryB: 0, queryC: 0, queryD: 0 };
+  let   belowThreshold = 0;
+
+  // Run Query A, C, D concurrently; Query B is per-postcode (sequential in its own async fn)
+  const [resultA, resultB, resultC, resultD] = await Promise.allSettled([
+    _hmlrQuery(
+      `${HMLR_BASE}?min-price=500000&_pageSize=100&_sort=-transactionDate&_format=json`,
+      timeout, 'queryA'
+    ),
+    _hmlrQueryB(timeout),
+    _hmlrQuery(
+      `${HMLR_BASE}?newBuild=true&min-price=300000&_pageSize=100&_sort=-transactionDate&_format=json`,
+      timeout, 'queryC'
+    ),
+    _hmlrQuery(
+      `${HMLR_BASE}?propertyType=F&estateType=L&min-price=400000&_pageSize=100&_sort=-transactionDate&_format=json`,
+      timeout, 'queryD'
+    ),
+  ]);
+
+  const all = [];
+
+  for (const [queryLabel, settled] of [
+    ['queryA', resultA], ['queryB', resultB], ['queryC', resultC], ['queryD', resultD],
+  ]) {
+    if (settled.status === 'rejected') {
+      log.error(`[HMLR ${queryLabel}] ${settled.reason?.message ?? settled.reason}`);
+      continue;
+    }
+    for (const item of (settled.value ?? [])) {
+      const mapped = mapHMLRRecord(item.raw, item.sourceUrl, queryLabel);
+      if (!mapped) { belowThreshold++; continue; }
+      if (seenIds.has(mapped.transactionId)) continue;
+      seenIds.add(mapped.transactionId);
+      all.push(mapped);
+      queryResults[queryLabel]++;
+    }
+  }
+
+  const valid = all.filter(l => validateCM2Lead({ ...l }) !== null);
+  const capped = limit ? valid.slice(0, limit) : valid;
+
+  appendHMLRScanHistory(capped);
+
+  printHMLRSummary(queryResults, all.length, capped.length, belowThreshold, capped);
+
+  return capped;
+}
+
+async function _hmlrQuery(url, timeout, label) {
+  log.info(`  [HMLR ${label}] ${url}`);
+  try {
+    const res = await axios.get(url, { timeout, headers: { Accept: 'application/json' } });
+    const items = res.data?.result?.items ?? res.data?.items ?? [];
+    return items.map(raw => ({ raw, sourceUrl: url }));
+  } catch (err) {
+    throw new Error(`[HMLR ${label}] ${err.message}`);
+  }
+}
+
+async function _hmlrQueryB(timeout) {
+  const results = [];
+  for (const postcode of PCL_POSTCODES) {
+    const url = `${HMLR_BASE}?propertyAddress.postcode=${encodeURIComponent(postcode)}&_pageSize=50&_sort=-transactionDate&_format=json`;
+    log.info(`  [HMLR queryB] ${postcode}`);
+    try {
+      const res = await axios.get(url, { timeout, headers: { Accept: 'application/json' } });
+      const items = res.data?.result?.items ?? res.data?.items ?? [];
+      for (const raw of items) results.push({ raw, sourceUrl: url });
+    } catch (err) {
+      log.error(`  [HMLR queryB ${postcode}] ${err.message}`);
+    }
+    await sleep(500); // light rate limiting within sequential loop
+  }
+  return results;
+}
+
+function mapHMLRRecord(item, sourceUrl, queryType) {
+  // Parse price
+  const price = parseInt(
+    String(item.pricePaid?.value ?? item.pricePaid ?? item.price ?? '0').replace(/[^0-9]/g, ''),
+    10
+  ) || null;
+
+  if (!price || price < 250_000) return null;
+
+  // Strip transactionId curly braces
+  const rawTxId = (
+    item['transaction-id']?.value ??
+    item.transactionId?.value ??
+    item.transactionId ??
+    ''
+  );
+  const transactionId = rawTxId.replace(/[{}]/g, '').trim();
+  if (!transactionId) return null;
+
+  // Build address
+  const addrObj  = item['property-address'] ?? item.propertyAddress ?? {};
+  const paon     = addrObj.paon?.value   ?? item.paon?.value   ?? '';
+  const saon     = addrObj.saon?.value   ?? item.saon?.value   ?? '';
+  const street   = addrObj.street?.value ?? item.street?.value ?? '';
+  const town     = addrObj.town?.value   ?? item.town?.value   ?? '';
+  const postcode = addrObj.postcode?.value ?? item.postcode?.value ?? '';
+  const property_address = [paon, saon, street, town].filter(Boolean).join(', ');
+
+  const propertyTypeCode = item.propertyType?.value ?? '';
+  const estateTypeCode   = item.estateType?.value   ?? '';
+  const newBuild         = item.newBuild?.value === 'Y' || item.newBuild === true;
+
+  const asset_class = { D: 'Detached', S: 'Semi-detached', T: 'Terraced', F: 'Flat/Apartment' }[propertyTypeCode] ?? null;
+  const tenure      = { F: 'Freehold', L: 'Leasehold' }[estateTypeCode] ?? null;
+  const pcl         = isPCL(postcode);
+
+  const budget_range     = priceToCM2Budget(price);
+  const motivation_signal = newBuild ? 'new_build_buyer' : 'recent_buyer';
+  const mandate_interest = assignHMLRMandate(pcl, price, estateTypeCode, propertyTypeCode, newBuild, property_address);
+
+  const score_intent       = scoreHMLRIntent(pcl, price, newBuild);
+  const score_capacity     = scoreHMLRCapacity(price);
+  const score_accessibility = 4; // HMLR only — no contact details
+  const score_fit          = scoreHMLRStrategicFit(pcl, price, estateTypeCode, propertyTypeCode, newBuild);
+
+  const w = { investment_intent_signal: 0.40, capital_capacity: 0.25, accessibility: 0.20, strategic_fit: 0.15 };
+  const lead_score = +(
+    score_intent       * w.investment_intent_signal +
+    score_capacity     * w.capital_capacity          +
+    score_accessibility * w.accessibility             +
+    score_fit          * w.strategic_fit
+  ).toFixed(2);
+
+  return {
+    // HMLR-specific columns
+    transactionId,
+    name:             null,
+    property_address,
+    postcode,
+    pcl,
+    asset_class,
+    tenure,
+    price,
+    budget_range,
+    motivation_signal,
+    motivation_score: score_intent,
+    lead_score,
+    mandate_interest,
+    date_found:       new Date().toISOString(),
+    source_url:       sourceUrl,
+    status:           'new',
+
+    // CLAUDE.md compatibility (standard lead columns)
+    company:          null,
+    nationality:      null,
+    property_interest: `UK residential — ${postcode || 'nationwide'}`,
+    contact_email:    null,
+    contact_phone:    null,
+    linkedin_url:     null,
+    motivation:       motivation_signal,
+
+    // Scoring breakdown
+    score_intent,
+    score_capacity,
+    score_accessibility,
+    score_fit,
+
+    // Metadata
+    type:        'cash_buyer',
+    sourceKey:   'hmlr_uk_wide',
+    queryType,
+    newBuild,
+    agentVersion: AGENT_VERSION,
+    capturedAt:   new Date().toISOString(),
+  };
+}
+
+// ── HMLR helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Convert a price to an exact CM2 budget string.
+ * Returns null if price < £250k.
+ */
+function priceToCM2Budget(price) {
+  if (!price || price < 250_000) return null;
+  if (price >= 3_000_000) return '£3M+';
+  if (price >= 1_000_000) return '£1M–£3M';
+  if (price >= 500_000)   return '£500k–£1M';
+  return '£250k–£500k';
+}
+
+/**
+ * True if a postcode falls within a PCL district.
+ */
+function isPCL(postcode) {
+  if (!postcode) return false;
+  const district = (postcode.trim().toUpperCase().match(/^([A-Z]{1,2}\d{1,2}[A-Z]?)/)?.[1] ?? '').trim();
+  return PCL_DISTRICTS.has(district);
+}
+
+function assignHMLRMandate(pcl, price, estateTypeCode, propertyTypeCode, newBuild, address) {
+  if (pcl && price >= 3_000_000) return 'London Heritage & Trophy';
+  if (pcl)                        return 'London Entry & Yield';
+  if (estateTypeCode === 'L' && propertyTypeCode === 'F') return 'SDLT for Non-Residents';
+  if (newBuild)                   return 'London Entry & Yield';
+  const lower = (address || '').toLowerCase();
+  if (lower.includes('dubai') || lower.includes('uae') || lower.includes('abu dhabi')) return 'UAE Golden Visa';
+  return 'London Entry & Yield';
+}
+
+function scoreHMLRIntent(pcl, price, newBuild) {
+  if (pcl && price >= 3_000_000) return 10;
+  if (pcl)                        return 9;
+  if (price >= 3_000_000)         return 8;
+  if (newBuild)                   return 7;
+  if (price >= 1_000_000)         return 7;
+  if (price >= 500_000)           return 6;
+  return 5;
+}
+
+function scoreHMLRCapacity(price) {
+  if (price >= 5_000_000) return 10;
+  if (price >= 3_000_000) return 9;
+  if (price >= 2_000_000) return 8;
+  if (price >= 1_000_000) return 7;
+  if (price >= 500_000)   return 6;
+  return 5;
+}
+
+function scoreHMLRStrategicFit(pcl, price, estateTypeCode, propertyTypeCode, newBuild) {
+  if (pcl && estateTypeCode === 'L' && propertyTypeCode === 'F' && price >= 1_000_000) return 10;
+  if (pcl && price >= 500_000) return 8;
+  if (newBuild && price >= 500_000) return 7;
+  if (price >= 1_000_000) return 7;
+  if (price >= 500_000)   return 6;
+  return 5;
+}
+
+/**
+ * Validate a lead for CM2 push eligibility.
+ * Returns the (possibly corrected) lead or null if invalid.
+ * @throws {Error} if transactionId is missing
+ */
+function validateCM2Lead(lead) {
+  if (!lead.transactionId || !String(lead.transactionId).trim()) {
+    throw new Error(`Missing transactionId for lead at ${lead.property_address ?? lead.name ?? '?'}`);
+  }
+
+  const price = parseInt(String(lead.price || '0').replace(/[^0-9]/g, ''), 10);
+  if (!price || price < 250_000) return null;
+
+  if (!VALID_CM2_BUDGETS.has(lead.budget_range)) {
+    lead.budget_range = priceToCM2Budget(price);
+    if (!VALID_CM2_BUDGETS.has(lead.budget_range)) return null;
+  }
+
+  return lead;
+}
+
+function loadHMLRDedupeKeys() {
+  const seen = new Set();
+
+  // From cm2-push-log.json (transactionId field on each entry)
+  try {
+    const logPath = path.join(DATA_DIR, 'cm2-push-log.json');
+    if (fs.existsSync(logPath)) {
+      const pushLog = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+      for (const entry of Object.values(pushLog)) {
+        if (entry.transactionId) seen.add(String(entry.transactionId));
+      }
+    }
+  } catch (_) {}
+
+  // From scan-history.tsv (column 2 = transactionId)
+  try {
+    const histPath = path.join(DATA_DIR, 'scan-history.tsv');
+    if (fs.existsSync(histPath)) {
+      const lines = fs.readFileSync(histPath, 'utf8').trim().split('\n');
+      for (const line of lines) {
+        const cols = line.split('\t');
+        if (cols[1] && cols[1] !== 'transactionId') seen.add(cols[1].trim());
+      }
+    }
+  } catch (_) {}
+
+  return seen;
+}
+
+function appendHMLRScanHistory(leads) {
+  if (!leads.length) return;
+  try {
+    const histPath = path.join(DATA_DIR, 'scan-history.tsv');
+    const lines    = leads.map((l) =>
+      [new Date().toISOString(), l.transactionId, l.property_address, l.price, l.lead_score].join('\t')
+    ).join('\n');
+    fs.appendFileSync(histPath, lines + '\n', 'utf8');
+  } catch (_) {}
+}
+
+function writeHMLRCsv(subdir, baseName, leads) {
+  const dir  = path.join(DATA_DIR, subdir);
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, `${baseName}.csv`);
+  const tmp  = `${dest}.tmp`;
+
+  const lines = [
+    HMLR_CSV_HEADERS.join(','),
+    ...leads.map((r) =>
+      HMLR_CSV_HEADERS.map((col) => {
+        const v = r[col];
+        if (v === null || v === undefined) return '';
+        return csvEscape(String(v));
+      }).join(',')
+    ),
+  ];
+
+  fs.writeFileSync(tmp, lines.join('\n') + '\n', 'utf8');
+  fs.renameSync(tmp, dest);
+  log.info(`HMLR CSV written → ${dest}`);
+  return dest;
+}
+
+function printHMLRSummary(queryResults, allCount, validCount, belowThreshold, leads) {
+  const dist = { ge9: 0, ge8: 0, ge7: 0, ge6: 0, ge5: 0 };
+  for (const l of leads) {
+    if (l.lead_score >= 9) dist.ge9++;
+    if (l.lead_score >= 8) dist.ge8++;
+    if (l.lead_score >= 7) dist.ge7++;
+    if (l.lead_score >= 6) dist.ge6++;
+    if (l.lead_score >= 5) dist.ge5++;
+  }
+
+  console.log('\n── HMLR UK-Wide Run Summary ─────────────────────────────');
+  console.log(`  Query A (high value):      ${queryResults.queryA}`);
+  console.log(`  Query B (PCL postcodes):   ${queryResults.queryB}`);
+  console.log(`  Query C (new builds):      ${queryResults.queryC}`);
+  console.log(`  Query D (leasehold flats): ${queryResults.queryD}`);
+  console.log(`  Total fetched:             ${allCount}`);
+  console.log(`  Below £250k (skipped):     ${belowThreshold}`);
+  console.log(`  Valid records:             ${validCount}`);
+  console.log(`  Score ≥5:  ${dist.ge5}   ≥6: ${dist.ge6}   ≥7: ${dist.ge7}   ≥8: ${dist.ge8}   ≥9: ${dist.ge9}`);
+
+  if (leads.length > 0) {
+    console.log('\n  Top 5 leads:');
+    leads.slice(0, 5).forEach((l, i) => {
+      console.log(`  ${i + 1}. [${l.lead_score}] ${(l.property_address ?? 'N/A').slice(0, 50)} — £${(l.price ?? 0).toLocaleString('en-GB')}`);
+    });
+  }
+  console.log('');
+}
+
+// ── HM Land Registry Price Paid (legacy PCL focus) ───────────────────────────
 
 async function fetchLandRegistry(srcCfg, defaults, limit) {
   const max        = limit ?? srcCfg.maxRecords ?? 500;
@@ -274,13 +613,13 @@ async function fetchLandRegistry(srcCfg, defaults, limit) {
 
 function buildLandRegistryUrl(baseUrl, outcode, minPrice, cutoffDate) {
   const params = new URLSearchParams({
-    '_view':          'basic',
-    '_pageSize':      '100',
-    'outcode':        outcode,
-    'pricePaid-min':  String(minPrice),
+    '_view':              'basic',
+    '_pageSize':          '100',
+    'outcode':            outcode,
+    'pricePaid-min':      String(minPrice),
     'dateOfTransfer-min': cutoffDate,
-    '_format':        'json',
-    '_output':        'none',
+    '_format':            'json',
+    '_output':            'none',
   });
   return `${baseUrl}?${params.toString()}`;
 }
@@ -290,8 +629,7 @@ function mapLandRegistryRecord(item, sourceUrl, outcode) {
   const address = [item.paon, item.saon, item.street, item.town].filter(Boolean).join(', ');
 
   return {
-    // CLAUDE.md lead CSV columns
-    name:              null,             // HMLR doesn't expose buyer names (privacy)
+    name:              null,
     company:           null,
     nationality:       null,
     property_interest: `London residential — ${outcode}`,
@@ -303,19 +641,17 @@ function mapLandRegistryRecord(item, sourceUrl, outcode) {
     source_url:        sourceUrl,
     date_found:        todayStr(),
     status:            'new',
-
-    // Enrichment
-    type:        'cash_buyer',
-    subtype:     item.newBuild?.value === 'Y' ? 'new_build_buyer' : 'resale_buyer',
+    type:              'cash_buyer',
+    subtype:           item.newBuild?.value === 'Y' ? 'new_build_buyer' : 'resale_buyer',
     address,
-    postcode:    item.postcode?.value ?? null,
+    postcode:          item.postcode?.value ?? null,
     price,
-    dateOfTransfer: item.dateOfTransfer?.value ?? null,
-    propertyType:   item.propertyType?.value ?? null,
-    estateType:     item.estateType?.value ?? null,
-    ppdCategory:    item.ppdCategory?.value ?? null,
-    newBuild:       item.newBuild?.value === 'Y',
-    transactionId:  item.transactionId?.value ?? null,
+    dateOfTransfer:    item.dateOfTransfer?.value ?? null,
+    propertyType:      item.propertyType?.value ?? null,
+    estateType:        item.estateType?.value ?? null,
+    ppdCategory:       item.ppdCategory?.value ?? null,
+    newBuild:          item.newBuild?.value === 'Y',
+    transactionId:     item.transactionId?.value ?? null,
   };
 }
 
@@ -336,7 +672,6 @@ async function fetchCompaniesHouse(sourceKey, srcCfg, defaults, limit) {
     return fetchPscOverseas(srcCfg, defaults, apiKey, max, limiter);
   }
 
-  // Company search by SIC code and search terms
   const searchTerms = srcCfg.searchTerms ?? [];
   const sicCodes    = srcCfg.filters?.sicCodes ?? [];
 
@@ -365,10 +700,8 @@ async function fetchCompaniesHouse(sourceKey, srcCfg, defaults, limit) {
     const items = data?.items ?? [];
     for (const company of items) {
       if (leads.length >= max) break;
-      // Filter by SIC code if specified
       const sics = company.sic_codes ?? [];
       if (sicCodes.length > 0 && !sicCodes.some((s) => sics.includes(s))) continue;
-
       leads.push(mapCompaniesHouseRecord(company, url, term));
     }
     log.info(`  [Companies House] "${term}": ${items.length} companies`);
@@ -381,7 +714,6 @@ async function fetchPscOverseas(srcCfg, defaults, apiKey, max, limiter) {
   const nationalities = srcCfg.filters?.nationality ?? [];
   const leads = [];
 
-  // PSC statement search — iterate nationality filters
   for (const nat of nationalities) {
     if (leads.length >= max) break;
 
@@ -486,7 +818,6 @@ async function fetchLinkedIn(srcCfg, defaults, limit) {
 
     let html;
     try {
-      // LinkedIn requires JS rendering for search results
       html = await fetchWithBrowser(url);
     } catch (err) {
       log.error(`  [LinkedIn] Fetch error: ${err.message}`);
@@ -496,13 +827,10 @@ async function fetchLinkedIn(srcCfg, defaults, limit) {
     const $ = cheerio.load(html);
     $(sel.card ?? '.reusable-search__result-container').each((_, el) => {
       if (leads.length >= max) return false;
-
       const card = $(el);
       const name = text(card, sel.name ?? '.entity-result__title-text');
       const profileUrl = href(card, sel.url ?? 'a.app-aware-link', srcCfg.baseUrl);
-
       if (!name && !profileUrl) return;
-
       leads.push({
         name,
         company:           null,
@@ -575,27 +903,16 @@ async function fetchPropertyPress(srcCfg, defaults, limit) {
         const snippet    = text(card, sel.snippet ?? 'p');
 
         if (!headline) return;
-
-        // Only include articles that mention recognisable investment signals
         if (!containsInvestmentSignal(headline + ' ' + (snippet ?? ''))) return;
 
         leads.push({
-          name:              null,
-          company:           null,
-          nationality:       null,
-          property_interest: query,
-          budget_range:      null,
-          contact_email:     null,
-          contact_phone:     null,
-          linkedin_url:      null,
-          motivation:        'press_mention',
-          source_url:        articleUrl ?? url,
-          date_found:        todayStr(),
-          status:            'new',
-          type:              'hnw_investor',
-          pressSource:       pressSrc.name,
-          headline,
-          snippet,
+          name: null, company: null, nationality: null,
+          property_interest: query, budget_range: null,
+          contact_email: null, contact_phone: null, linkedin_url: null,
+          motivation: 'press_mention',
+          source_url: articleUrl ?? url,
+          date_found: todayStr(), status: 'new',
+          type: 'hnw_investor', pressSource: pressSrc.name, headline, snippet,
         });
       });
     }
@@ -645,20 +962,13 @@ async function fetchExpatForums(srcCfg, defaults, limit) {
         if (!containsInvestmentSignal(content)) return;
 
         leads.push({
-          name:              author,
-          company:           null,
-          nationality:       null,
-          property_interest: query,
-          budget_range:      null,
-          contact_email:     null,
-          contact_phone:     null,
-          linkedin_url:      null,
-          motivation:        'expat_forum_enquiry',
-          source_url:        postUrl ?? url,
-          date_found:        todayStr(),
-          status:            'new',
-          type:              'expat',
-          postSnippet:       content.slice(0, 200),
+          name: author, company: null, nationality: null,
+          property_interest: query, budget_range: null,
+          contact_email: null, contact_phone: null, linkedin_url: null,
+          motivation: 'expat_forum_enquiry',
+          source_url: postUrl ?? url,
+          date_found: todayStr(), status: 'new',
+          type: 'expat', postSnippet: content.slice(0, 200),
         });
       });
     }
@@ -667,7 +977,7 @@ async function fetchExpatForums(srcCfg, defaults, limit) {
   return leads;
 }
 
-// ── Generic HTML scraper fallback ─────────────────────────────────────────────
+// ── Generic HTML scraper ──────────────────────────────────────────────────────
 
 async function fetchGeneric(sourceKey, srcCfg, defaults, limit) {
   log.warn(`  No specific fetcher for "${sourceKey}" — using generic HTML scraper.`);
@@ -698,24 +1008,16 @@ async function fetchGeneric(sourceKey, srcCfg, defaults, limit) {
     $(sel.card ?? '.result').each((_, el) => {
       if (leads.length >= max) return false;
       const card = $(el);
-      const name       = text(card, sel.name);
-      const linkUrl    = href(card, sel.url ?? 'a', (srcCfg.baseUrl ?? ''));
+      const name    = text(card, sel.name);
+      const linkUrl = href(card, sel.url ?? 'a', (srcCfg.baseUrl ?? ''));
       if (!name && !linkUrl) return;
 
       leads.push({
-        name,
-        company:           null,
-        nationality:       null,
-        property_interest: null,
-        budget_range:      null,
-        contact_email:     null,
-        contact_phone:     null,
-        linkedin_url:      null,
-        motivation:        sourceKey,
-        source_url:        linkUrl ?? url,
-        date_found:        todayStr(),
-        status:            'new',
-        type:              srcCfg.type ?? 'hnw_investor',
+        name, company: null, nationality: null, property_interest: null, budget_range: null,
+        contact_email: null, contact_phone: null, linkedin_url: null,
+        motivation: sourceKey, source_url: linkUrl ?? url,
+        date_found: todayStr(), status: 'new',
+        type: srcCfg.type ?? 'hnw_investor',
       });
     });
   }
@@ -723,26 +1025,21 @@ async function fetchGeneric(sourceKey, srcCfg, defaults, limit) {
   return leads;
 }
 
-// ── Lead scoring ──────────────────────────────────────────────────────────────
+// ── Lead scoring (legacy sources) ─────────────────────────────────────────────
 
-/**
- * Attach scoring, agentVersion, capturedAt, and flags to a raw lead object.
- * Scores are based on signals in the lead data. All scoring is transparent
- * and stored per-dimension so it can be overridden by a human reviewer.
- */
 function enrichLead(lead, sourceKey, srcCfg, weights) {
   const scores = {
-    intent:      scoreIntentSignal(lead),
-    capacity:    scoreCapacity(lead),
+    intent:        scoreIntentSignal(lead),
+    capacity:      scoreCapacity(lead),
     accessibility: scoreAccessibility(lead),
-    fit:         scoreStrategicFit(lead),
+    fit:           scoreStrategicFit(lead),
   };
 
   const composite = (
-    scores.intent       * weights.investment_intent_signal +
-    scores.capacity     * weights.capital_capacity         +
-    scores.accessibility * weights.accessibility            +
-    scores.fit          * weights.strategic_fit
+    scores.intent        * weights.investment_intent_signal +
+    scores.capacity      * weights.capital_capacity          +
+    scores.accessibility * weights.accessibility              +
+    scores.fit           * weights.strategic_fit
   );
 
   return {
@@ -762,31 +1059,31 @@ function enrichLead(lead, sourceKey, srcCfg, weights) {
 function scoreIntentSignal(lead) {
   const motivation = lead.motivation ?? '';
   if (['recent_buyer', 'new_build_buyer', 'resale_buyer'].includes(motivation)) return 10;
-  if (motivation === 'property_company')  return 8;
-  if (motivation === 'overseas_property_vehicle') return 8;
-  if (motivation === 'press_mention')     return 6;
-  if (motivation === 'linkedin_profile_signal') return 5;
-  if (motivation === 'expat_forum_enquiry') return 4;
+  if (motivation === 'property_company')            return 8;
+  if (motivation === 'overseas_property_vehicle')   return 8;
+  if (motivation === 'press_mention')               return 6;
+  if (motivation === 'linkedin_profile_signal')     return 5;
+  if (motivation === 'expat_forum_enquiry')         return 4;
   return 2;
 }
 
 function scoreCapacity(lead) {
   const price = lead.price ?? parseBudgetBand(lead.budget_range);
   if (!price) return 2;
-  if (price >= 5_000_000)  return 10;
-  if (price >= 2_000_000)  return 8;
-  if (price >= 1_000_000)  return 6;
-  if (price >= 500_000)    return 4;
+  if (price >= 5_000_000) return 10;
+  if (price >= 2_000_000) return 8;
+  if (price >= 1_000_000) return 6;
+  if (price >= 500_000)   return 4;
   return 2;
 }
 
 function scoreAccessibility(lead) {
   let score = 2;
-  if (lead.contact_email)  score = Math.max(score, 10);
-  if (lead.contact_phone)  score = Math.max(score, 9);
-  if (lead.linkedin_url)   score = Math.max(score, 8);
+  if (lead.contact_email)               score = Math.max(score, 10);
+  if (lead.contact_phone)               score = Math.max(score, 9);
+  if (lead.linkedin_url)                score = Math.max(score, 8);
   if (lead.company && lead.companyNumber) score = Math.max(score, 6);
-  if (lead.source_url)     score = Math.max(score, 4);
+  if (lead.source_url)                  score = Math.max(score, 4);
   return score;
 }
 
@@ -795,26 +1092,25 @@ function scoreStrategicFit(lead) {
   const motivation = lead.motivation ?? '';
   const nat        = (lead.nationality ?? '').toLowerCase();
 
-  // Strong fit signals
-  if (type === 'family_office')          return 10;
-  if (motivation === 'overseas_property_vehicle') return 9;
+  if (type === 'family_office')                    return 10;
+  if (motivation === 'overseas_property_vehicle')  return 9;
   if (['emirati', 'saudi', 'qatari', 'chinese', 'hong kong', 'singaporean'].some((n) => nat.includes(n))) return 9;
-  if (type === 'cash_buyer')             return 7;
-  if (type === 'developer')              return 7;
-  if (type === 'hnw_investor')           return 6;
-  if (type === 'expat')                  return 5;
+  if (type === 'cash_buyer')  return 7;
+  if (type === 'developer')   return 7;
+  if (type === 'hnw_investor') return 6;
+  if (type === 'expat')       return 5;
   return 3;
 }
 
 function computeLeadFlags(lead, scores) {
   const flags = [];
-  if (scores.intent >= 9)       flags.push('high_intent');
-  if (scores.capacity >= 8)     flags.push('high_budget');
+  if (scores.intent >= 9)        flags.push('high_intent');
+  if (scores.capacity >= 8)      flags.push('high_budget');
   if (scores.accessibility >= 8) flags.push('contactable');
-  if (scores.fit >= 8)          flags.push('core_profile');
+  if (scores.fit >= 8)           flags.push('core_profile');
   if (lead.nationality && !['british', 'uk'].includes((lead.nationality ?? '').toLowerCase()))
     flags.push('international');
-  if (lead.ppdCategory === 'B') flags.push('buy_to_let');
+  if (lead.ppdCategory === 'B')  flags.push('buy_to_let');
   return flags;
 }
 
@@ -859,8 +1155,8 @@ function maybeUpdatePipeline(leads) {
   const pipelinePath = path.join(DATA_DIR, 'pipeline.md');
   fs.mkdirSync(path.dirname(pipelinePath), { recursive: true });
   const header = !fs.existsSync(pipelinePath) ? '# Square Centimeter — Pipeline Review Items\n\n' : '';
-  const rows = highValue.map((l) =>
-    `- [ ] **${l.name ?? l.company ?? 'Unknown'}** | Score ${l.lead_score}/10 | ${l.type} | ${l.motivation} | ${l.source_url ?? ''}`
+  const rows   = highValue.map((l) =>
+    `- [ ] **${l.name ?? l.company ?? l.transactionId ?? 'Unknown'}** | Score ${l.lead_score}/10 | ${l.type} | ${l.motivation ?? l.motivation_signal} | ${l.source_url ?? ''}`
   ).join('\n');
   fs.appendFileSync(pipelinePath, `${header}## Batch ${todayStr()}\n${rows}\n\n`, 'utf8');
   log.info(`Pipeline updated — ${highValue.length} high-value leads flagged for Julian Noble.`);
@@ -875,7 +1171,7 @@ function loadExistingDedupeKeys(dedupeKey) {
   try {
     files = listFiles('leads/raw');
   } catch (_) {
-    return keys;   // no existing files
+    return keys;
   }
 
   for (const file of files) {
@@ -888,9 +1184,7 @@ function loadExistingDedupeKeys(dedupeKey) {
           if (k) keys.add(k);
         }
       }
-    } catch (_) {
-      // Corrupt file — skip; don't mask other errors
-    }
+    } catch (_) {}
   }
 
   return keys;
@@ -902,11 +1196,6 @@ function loadConfig() {
   return yaml.load(fs.readFileSync(CONFIG_PATH, 'utf8'));
 }
 
-/**
- * Resolve a source key or type name → source key.
- * Returns the exact key if it exists, otherwise the first enabled source
- * whose `type` matches the input string.
- */
 function resolveSourceKey(config, input) {
   if (config.sources[input]) return input;
   const match = Object.entries(config.sources).find(([, s]) => s.type === input && s.enabled);
@@ -915,7 +1204,7 @@ function resolveSourceKey(config, input) {
 
 function validateSourceConfig(cfg, key) {
   const issues = [];
-  if (!cfg.type)    issues.push('missing type');
+  if (!cfg.type)      issues.push('missing type');
   if (!cfg.rateLimit) issues.push('missing rateLimit');
   if (issues.length) {
     log.warn(`[DRY RUN] "${key}" config issues: ${issues.join(', ')}`);
@@ -927,12 +1216,8 @@ function validateSourceConfig(cfg, key) {
 function buildGenericUrls(cfg) {
   const base = cfg.baseUrl ?? '';
   const tmpl = cfg.searchPath ?? '';
-  if (cfg.cities?.length) {
-    return cfg.cities.map((c) => `${base.replace('{city}', c)}${tmpl}`);
-  }
-  if (cfg.counties?.length) {
-    return cfg.counties.map((c) => (typeof c === 'object' ? c.url : c));
-  }
+  if (cfg.cities?.length) return cfg.cities.map((c) => `${base.replace('{city}', c)}${tmpl}`);
+  if (cfg.counties?.length) return cfg.counties.map((c) => (typeof c === 'object' ? c.url : c));
   return [`${base}${tmpl}`];
 }
 
@@ -945,14 +1230,14 @@ function defaultWeights() {
   };
 }
 
-function containsInvestmentSignal(text) {
+function containsInvestmentSignal(str) {
   const signals = [
     'invest', 'acqui', 'purchas', 'buy', 'portfolio',
     'prime london', 'pcl', 'chelsea', 'mayfair', 'kensington',
     'belgravia', 'knightsbridge', 'family office', 'fund',
     '£', 'million', 'residential',
   ];
-  const lower = text.toLowerCase();
+  const lower = str.toLowerCase();
   return signals.some((s) => lower.includes(s));
 }
 
@@ -963,12 +1248,11 @@ function formatBudgetBand(price) {
   if (price >= 2_000_000)  return '£2m–£5m';
   if (price >= 1_000_000)  return '£1m–£2m';
   if (price >= 500_000)    return '£500k–£1m';
-  return `<£500k`;
+  return '<£500k';
 }
 
 function parseBudgetBand(band) {
   if (!band) return null;
-  // Extract the lower bound of a band like "£2m–£5m"
   const m = String(band).match(/£([\d.]+)(m|k)?/i);
   if (!m) return null;
   const n = parseFloat(m[1]);
@@ -979,7 +1263,6 @@ function parseBudgetBand(band) {
   return n;
 }
 
-/** agent-browser fetch (same implementation as agent1 — DRY candidate) */
 async function fetchWithBrowser(url) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('agent-browser timeout')), 55_000);
@@ -1036,4 +1319,4 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-module.exports = { run, runAll, listSources, AGENT_VERSION };
+module.exports = { run, runAll, listSources, validateCM2Lead, priceToCM2Budget, isPCL, AGENT_VERSION };

@@ -131,25 +131,31 @@ program
 // ── sc analyze ────────────────────────────────────────────────────────────────
 program
   .command('analyze')
-  .description('Agent 3 — Analyse a property and generate an investment memo')
-  .option('-i, --input <file>',       'Properties JSON file (uses latest if omitted)')
-  .option('-s, --strategy <strategy>','buy-hold | flip | wholesale', 'buy-hold')
-  .option('-n, --narratives',         'Add LLM deal narratives (requires ANTHROPIC_API_KEY)')
+  .description('Agent 3 — Score prime London properties and generate investment memos')
+  .option('-i, --input <file>',              'Listings JSON file (uses latest in data/raw/ if omitted)')
+  .option('--additional-property',           'Apply 3 % SDLT additional-property surcharge (default: on)', true)
+  .option('--non-uk-resident',               'Apply 2 % SDLT non-UK-resident surcharge (default: off)')
+  .option('--ltv <fraction>',               'Mortgage LTV for cash-on-cash ROI (default: 0.65)', parseFloat)
+  .option('--rate <pct>',                   'Interest rate for cash-on-cash ROI (default: 0.045)', parseFloat)
+  .option('--no-memo',                      'Skip writing .md memos to reports/')
   .action(handle(async (opts) => {
     const report = await analyst.run({
-      input:      opts.input,
-      strategy:   opts.strategy,
-      narratives: opts.narratives,
+      input:             opts.input,
+      additionalProperty: opts.additionalProperty !== false,
+      nonUkResident:     !!opts.nonUkResident,
+      mortgageLtv:       opts.ltv   ?? 0.65,
+      mortgageRate:      opts.rate  ?? 0.045,
+      writeMemo:         opts.memo  !== false,
     });
 
     const top5 = (report.topDeals ?? []).slice(0, 5);
-    console.log(`\n✅  Analysis complete — strategy: ${report.strategy}`);
-    console.log(`   ${report.totalAnalyzed} properties analysed`);
+    console.log(`\n✅  Analysis complete — ${report.totalAnalyzed} propert${report.totalAnalyzed === 1 ? 'y' : 'ies'} scored`);
     if (top5.length) {
       console.log('\n   Top opportunities:');
-      top5.forEach((d, i) =>
-        console.log(`   ${i + 1}. [${d.score}/100] ${d.address ?? 'N/A'} — ${d.rawPrice ?? 'no price'}`)
-      );
+      top5.forEach((d, i) => {
+        const price = d.price ? `£${d.price.toLocaleString('en-GB')}` : 'no price';
+        console.log(`   ${i + 1}. [${d.score}/100] ${d.recommendation.padEnd(7)} ${d.address ?? 'N/A'} — ${price}`);
+      });
     }
     console.log(`   → reports/\n`);
   }));
@@ -339,7 +345,7 @@ program
 
     // ── Stage 3: Analyse ─────────────────────────────────────────────────
     console.log('Stage 3/5 — Running investment analysis…');
-    const report = await analyst.run({ strategy: opts.strategy });
+    const report = await analyst.run({ additionalProperty: true });
     console.log(`  ✓ ${report.totalAnalyzed ?? 0} properties analysed | top score: ${report.topDeals?.[0]?.score ?? 'N/A'}\n`);
 
     // ── Stage 4: Marketing ───────────────────────────────────────────────

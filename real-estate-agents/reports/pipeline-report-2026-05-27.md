@@ -1,5 +1,5 @@
 # Square Centimeter Ltd — Pipeline Report
-_Generated: 2026-05-27T13:09:00.547Z_
+_Generated: 2026-05-27T13:26:38.261Z_
 
 ## Property Pipeline
 

@@ -17,6 +17,16 @@ const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.resolve(__dirname, '..', 'data');
 
+// Investment memos and pipeline reports live at the project root (not inside data/)
+const REPORTS_DIR = process.env.REPORTS_DIR
+  ? path.resolve(process.env.REPORTS_DIR)
+  : path.resolve(__dirname, '..', 'reports');
+
+// Marketing content lives at the project root (not inside data/)
+const OUTPUTS_DIR = process.env.OUTPUTS_DIR
+  ? path.resolve(process.env.OUTPUTS_DIR)
+  : path.resolve(__dirname, '..', 'outputs');
+
 /**
  * Write records to a timestamped JSON file.
  * Supports nested subdirs: subdir='leads/raw' creates data/leads/raw/.
@@ -98,4 +108,4 @@ function statusSummary() {
   return summary;
 }
 
-module.exports = { writeData, readData, listFiles, statusSummary, DATA_DIR };
+module.exports = { writeData, readData, listFiles, statusSummary, DATA_DIR, REPORTS_DIR, OUTPUTS_DIR };

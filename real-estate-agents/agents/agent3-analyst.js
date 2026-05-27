@@ -37,7 +37,7 @@
 const fs   = require('fs');
 const path = require('path');
 
-const { listFiles, DATA_DIR } = require('../utils/fileStore');
+const { listFiles, DATA_DIR, REPORTS_DIR } = require('../utils/fileStore');
 const createLogger             = require('../utils/logger');
 
 const log = createLogger('agent3-analyst');
@@ -548,9 +548,8 @@ function writeMemoFile(deal) {
   const date    = new Date().toISOString().slice(0, 10);
   const filename = `memo-${slug}-${date}.md`;
 
-  const dir  = path.join(DATA_DIR, 'reports');
-  fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, filename);
+  fs.mkdirSync(REPORTS_DIR, { recursive: true });
+  const dest = path.join(REPORTS_DIR, filename);
   const tmp  = `${dest}.tmp`;
 
   fs.writeFileSync(tmp, buildMemoMarkdown(deal), 'utf8');

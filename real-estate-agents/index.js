@@ -26,7 +26,7 @@ const path        = require('path');
 const readline    = require('readline');
 
 const createLogger                         = require('./utils/logger');
-const { statusSummary, DATA_DIR, listFiles } = require('./utils/fileStore');
+const { DATA_DIR, REPORTS_DIR, OUTPUTS_DIR, listFiles } = require('./utils/fileStore');
 
 const log = createLogger('sc');
 
@@ -142,7 +142,7 @@ program
   .option('--non-uk-resident',        'Apply 2 % SDLT non-UK-resident surcharge (default: off)')
   .option('--ltv <fraction>',         'Mortgage LTV for cash-on-cash ROI (default: 0.65)', parseFloat)
   .option('--rate <pct>',             'Interest rate for cash-on-cash ROI (default: 0.045)', parseFloat)
-  .option('--no-memo',                'Skip writing .md memos to data/reports/')
+  .option('--no-memo',                'Skip writing .md memos to reports/')
   .action(handle(async (opts) => {
     const analysisOpts = {
       additionalProperty: opts.additionalProperty !== false,
@@ -318,13 +318,13 @@ program
 
     console.log(`\n✅  Outreach prep complete`);
     console.log(`   ${result.briefings.length} briefing note(s) prepared for Julian Noble`);
-    console.log(`   → data/reports/\n`);
+    console.log(`   → reports/\n`);
   }));
 
 // ── sc report ─────────────────────────────────────────────────────────────────
 program
   .command('report')
-  .description('Generate full pipeline report and save to data/reports/pipeline-report-YYYY-MM-DD.md')
+  .description('Generate full pipeline report and save to reports/pipeline-report-YYYY-MM-DD.md')
   .option('-f, --format <fmt>',  'text | json | md', 'text')
   .action(handle(async (opts) => {
     const report = buildPipelineReport();
@@ -336,16 +336,15 @@ program
 
     const markdown = formatReportMarkdown(report);
 
-    // ── Always save .md file ─────────────────────────────────────────────────
-    const reportDir = path.join(DATA_DIR, 'reports');
+    // ── Always save .md file to reports/ (project root) ─────────────────────
     try {
-      fs.mkdirSync(reportDir, { recursive: true });
+      fs.mkdirSync(REPORTS_DIR, { recursive: true });
       const filename = `pipeline-report-${todayStr()}.md`;
-      const dest     = path.join(reportDir, filename);
+      const dest     = path.join(REPORTS_DIR, filename);
       const tmp      = `${dest}.tmp`;
       fs.writeFileSync(tmp, markdown, 'utf8');
       fs.renameSync(tmp, dest);
-      console.log(`\n  💾  Report saved: data/reports/${filename}`);
+      console.log(`\n  💾  Report saved: reports/${filename}`);
     } catch (err) {
       log.warn(`Could not save report file: ${err.message}`);
       logTrackerEntry(`ERROR | Report save failed: ${err.message}`);
@@ -449,26 +448,45 @@ program
   .command('status')
   .description('Show pipeline counts: raw leads, qualified, contacted, converted')
   .action(handle(async () => {
-    const dirs = [
-      { key: 'raw',              label: 'Listings        (data/raw/)' },
-      { key: 'leads/raw',        label: 'Raw leads       (data/leads/raw/)' },
-      { key: 'leads/qualified',  label: 'Qualified leads (data/leads/qualified/)' },
-      { key: 'leads/contacted',  label: 'Contacted       (data/leads/contacted/)' },
-      { key: 'reports',          label: 'Memos & reports (data/reports/)' },
-      { key: 'outputs',          label: 'Marketing output (data/outputs/)' },
+    // Data subdirs — contain timestamped JSON files
+    const dataDirs = [
+      { key: 'raw',             label: 'Listings        (data/raw/)' },
+      { key: 'leads/raw',       label: 'Raw leads       (data/leads/raw/)' },
+      { key: 'leads/qualified', label: 'Qualified leads (data/leads/qualified/)' },
+      { key: 'leads/contacted', label: 'Contacted       (data/leads/contacted/)' },
     ];
+
+    // Root-level directories — memos (.md) and marketing dirs
+    const memoFiles   = safeListFilesMd(REPORTS_DIR);
+    const outputDirs  = safeListOutputDirs();
 
     console.log('\n📊  Square Centimeter — Pipeline Status\n');
     console.log('  Directory                         Files  Records   Latest file');
     console.log('  ' + '─'.repeat(72));
 
-    for (const { key, label } of dirs) {
+    for (const { key, label } of dataDirs) {
       const files   = safeListFiles(key);
       const latest  = files[0] ? path.basename(files[0]) : '(none)';
       const records = countRecords(files[0]);
       console.log(
         `  ${label.padEnd(36)} ${String(files.length).padStart(5)}  ` +
         `${String(records ?? '–').padStart(7)}   ${latest}`,
+      );
+    }
+
+    // Reports row — .md files from root reports/
+    {
+      const latest = memoFiles[0] ? path.basename(memoFiles[0]) : '(none)';
+      console.log(
+        `  ${'Reports         (reports/)'.padEnd(36)} ${String(memoFiles.length).padStart(5)}  ` +
+        `${'–'.padStart(7)}   ${latest}`,
+      );
+    }
+    // Outputs row — marketing subdirs from root outputs/
+    {
+      console.log(
+        `  ${'Marketing output (outputs/)'.padEnd(36)} ${String(outputDirs.length).padStart(5)}  ` +
+        `${'–'.padStart(7)}   ${outputDirs[0] ?? '(none)'}`,
       );
     }
 
@@ -756,7 +774,7 @@ function printAnalysisReport(report) {
   if (acquireCount > 0) {
     console.log(`\n   🟢  ${acquireCount} ACQUIRE recommendation${acquireCount > 1 ? 's' : ''}`);
   }
-  console.log(`   → data/reports/\n`);
+  console.log(`   → reports/\n`);
 }
 
 // ── Report builders ───────────────────────────────────────────────────────────
@@ -769,7 +787,7 @@ function buildPipelineReport() {
   const rawFiles    = safeListFiles('raw');
   const leadFiles   = safeListFiles('leads/raw');
   const qualFiles   = safeListFiles('leads/qualified');
-  const reportFiles = safeListFilesMd('reports');
+  const reportFiles = safeListFilesMd(REPORTS_DIR);
   const outputDirs  = safeListOutputDirs();
 
   const totalListings = rawFiles.reduce((n, f)  => n + (countRecords(f) ?? 0), 0);
@@ -884,25 +902,23 @@ function formatReportMarkdown(r) {
 
 // ── Filesystem helpers ────────────────────────────────────────────────────────
 
-/** List .md files in a DATA_DIR subdir, newest first. */
-function safeListFilesMd(subdir) {
+/** List .md files in an absolute directory path, newest first. */
+function safeListFilesMd(absDir) {
   try {
-    const dir = path.join(DATA_DIR, subdir);
-    if (!fs.existsSync(dir)) return [];
-    return fs.readdirSync(dir)
+    if (!fs.existsSync(absDir)) return [];
+    return fs.readdirSync(absDir)
       .filter((f) => f.endsWith('.md'))
-      .map((f)    => path.join(dir, f))
+      .map((f)    => path.join(absDir, f))
       .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
   } catch (_) { return []; }
 }
 
-/** List marketing output subdirs in data/outputs/. */
+/** List marketing output subdirs in outputs/ (project root). */
 function safeListOutputDirs() {
   try {
-    const dir = path.join(DATA_DIR, 'outputs');
-    if (!fs.existsSync(dir)) return [];
-    return fs.readdirSync(dir)
-      .filter((d) => fs.statSync(path.join(dir, d)).isDirectory())
+    if (!fs.existsSync(OUTPUTS_DIR)) return [];
+    return fs.readdirSync(OUTPUTS_DIR)
+      .filter((d) => fs.statSync(path.join(OUTPUTS_DIR, d)).isDirectory())
       .filter((d) => d.startsWith('marketing-'));
   } catch (_) { return []; }
 }

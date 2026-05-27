@@ -47,7 +47,7 @@ const fs      = require('fs');
 const path    = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 
-const { listFiles, DATA_DIR } = require('../utils/fileStore');
+const { listFiles, DATA_DIR, OUTPUTS_DIR } = require('../utils/fileStore');
 const createLogger              = require('../utils/logger');
 
 const log = createLogger('agent4-marketing');
@@ -719,8 +719,7 @@ const OUTPUT_FILENAMES = {
 function writeOutputFiles(deal, outputs) {
   const zone = (deal.marketZone ?? 'london').toLowerCase();
   const date = today();
-  const dirRel = path.join('outputs', `marketing-${zone}-${date}`);
-  const dir    = path.join(DATA_DIR, dirRel);
+  const dir = path.join(OUTPUTS_DIR, `marketing-${zone}-${date}`);
 
   fs.mkdirSync(dir, { recursive: true });
 

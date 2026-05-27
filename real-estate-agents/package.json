@@ -1,0 +1,38 @@
+{
+  "name": "real-estate-agents",
+  "version": "1.0.0",
+  "description": "Real Estate AI Agent Team — multi-agent investment pipeline",
+  "main": "index.js",
+  "bin": {
+    "realestate": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "jest --coverage",
+    "lint": "eslint agents/ utils/ index.js",
+    "status": "node index.js status"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0",
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
+    "winston": "^3.17.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.17.0",
+    "jest": "^29.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "real-estate",
+    "ai-agents",
+    "investment",
+    "lead-generation",
+    "web-crawler"
+  ],
+  "license": "MIT"
+}

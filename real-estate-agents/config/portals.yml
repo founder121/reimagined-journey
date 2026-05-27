@@ -1,0 +1,117 @@
+# ============================================================
+# Real Estate Portal Crawler Configuration
+# ============================================================
+# Each portal entry controls how agent1-crawler.js behaves
+# when targeting that site.
+#
+# Fields:
+#   enabled       – set false to skip without removing the config
+#   baseUrl       – root URL (no trailing slash)
+#   searchPath    – path template; use {state}, {page} tokens
+#   rateLimit     – minimum seconds between requests (float)
+#   maxPages      – hard cap on pages crawled per run
+#   userAgent     – value sent in User-Agent header
+#   respectRobots – always true; setting false is a no-op (safety guard)
+#   selectors     – CSS selectors used by the parser
+# ============================================================
+
+portals:
+
+  zillow:
+    enabled: true
+    baseUrl: "https://www.zillow.com"
+    searchPath: "/homes/{state}_rb/{page}_p/"
+    rateLimit: 4.0          # seconds between requests
+    maxPages: 10
+    userAgent: "RealEstateResearchBot/1.0 (+https://example.com/bot)"
+    respectRobots: true
+    headers:
+      Accept-Language: "en-US,en;q=0.9"
+    selectors:
+      listingCard:  "article[data-test='property-card']"
+      address:      "[data-test='property-card-addr']"
+      price:        "[data-test='property-card-price']"
+      beds:         "[data-test='beds']"
+      baths:        "[data-test='baths']"
+      sqft:         "abbr[htmx-ext]"    # fallback text parse
+      daysOnMarket: "[data-test='date-listed']"
+      listingUrl:   "a[data-test='property-card-link']"
+
+  realtor:
+    enabled: true
+    baseUrl: "https://www.realtor.com"
+    searchPath: "/realestateandhomes-search/{state}/pg-{page}"
+    rateLimit: 3.5
+    maxPages: 10
+    userAgent: "RealEstateResearchBot/1.0 (+https://example.com/bot)"
+    respectRobots: true
+    selectors:
+      listingCard:  "[data-testid='card-content']"
+      address:      "[data-testid='card-address-1']"
+      price:        "[data-testid='card-price']"
+      beds:         "[data-testid='card-meta-beds'] span"
+      baths:        "[data-testid='card-meta-baths'] span"
+      sqft:         "[data-testid='card-meta-sqft'] span"
+      daysOnMarket: "[data-testid='list-date']"
+      listingUrl:   "a[data-testid='card-anchor']"
+
+  redfin:
+    enabled: false           # disabled by default — check ToS before enabling
+    baseUrl: "https://www.redfin.com"
+    searchPath: "/state/{state}/filter/include=sold-3yr"
+    rateLimit: 5.0
+    maxPages: 5
+    userAgent: "RealEstateResearchBot/1.0 (+https://example.com/bot)"
+    respectRobots: true
+    selectors:
+      listingCard:  ".HomeCardContainer"
+      address:      ".homeAddressV2"
+      price:        ".homecardV2Price"
+      beds:         ".HomeStatsV2 .stat:nth-child(1)"
+      baths:        ".HomeStatsV2 .stat:nth-child(2)"
+      sqft:         ".HomeStatsV2 .stat:nth-child(3)"
+      daysOnMarket: ".daysOnMarket"
+      listingUrl:   "a.link-and-anchor"
+
+  loopnet:
+    enabled: false           # commercial properties
+    baseUrl: "https://www.loopnet.com"
+    searchPath: "/search/commercial-real-estate/{state}/for-sale/"
+    rateLimit: 6.0
+    maxPages: 5
+    userAgent: "RealEstateResearchBot/1.0 (+https://example.com/bot)"
+    respectRobots: true
+    selectors:
+      listingCard:  ".placard"
+      address:      ".placard-content address"
+      price:        ".placard-price"
+      sqft:         ".placard-sqft"
+      listingUrl:   "a.placard-title-link"
+
+  crexi:
+    enabled: false           # commercial + multifamily
+    baseUrl: "https://www.crexi.com"
+    searchPath: "/properties?stateAbbreviation={state}&page={page}"
+    rateLimit: 5.0
+    maxPages: 5
+    userAgent: "RealEstateResearchBot/1.0 (+https://example.com/bot)"
+    respectRobots: true
+    selectors:
+      listingCard:  ".asset-card"
+      address:      ".asset-address"
+      price:        ".asset-price"
+      capRate:      ".cap-rate-value"
+      listingUrl:   "a.asset-card-link"
+
+# ============================================================
+# Global crawler defaults (apply when portal-level key absent)
+# ============================================================
+defaults:
+  rateLimit: 3.0
+  maxPages: 5
+  respectRobots: true
+  outputDir: "data/properties"
+  filenameTemplate: "{portal}-{state}-{date}.json"
+  timeout: 30000            # ms per request
+  retries: 2
+  retryDelay: 5.0           # seconds before retry

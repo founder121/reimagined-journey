@@ -1,0 +1,235 @@
+# ============================================================
+# Lead Source Configuration
+# ============================================================
+# Configures agent2-leads.js for each motivated-seller / buyer
+# lead source.  All sources must be publicly accessible without
+# authentication, or use a documented public API.
+#
+# Lead types:
+#   fsbo        – For Sale By Owner (owner self-listed)
+#   expired     – MLS listings whose contract expired
+#   preforeclosure – NOD / lis pendens from county records
+#   probate     – Estate sales from probate court filings
+#   cashbuyer   – Recent cash purchases (flippers / investors)
+#   landlord    – Landlord / rental property owners
+# ============================================================
+
+sources:
+
+  # ----------------------------------------------------------
+  # FSBO — For Sale By Owner
+  # ----------------------------------------------------------
+  fsbo_zillow:
+    enabled: true
+    type: fsbo
+    baseUrl: "https://www.zillow.com"
+    searchPath: "/homes/fsbo/{state}_rb/"
+    rateLimit: 4.0
+    maxRecords: 200
+    dedupeKey: "listingUrl"
+    outputFile: "data/leads/fsbo-zillow-{state}-{date}.json"
+    selectors:
+      card:    "article[data-test='property-card']"
+      address: "[data-test='property-card-addr']"
+      price:   "[data-test='property-card-price']"
+      url:     "a[data-test='property-card-link']"
+    fields:
+      - address
+      - price
+      - listingUrl
+      - source: "zillow-fsbo"
+
+  fsbo_craigslist:
+    enabled: true
+    type: fsbo
+    # Uses Craigslist's public search (no auth required)
+    baseUrl: "https://{city}.craigslist.org"
+    searchPath: "/search/rea?sale_date=all+dates&query=for+sale+by+owner"
+    rateLimit: 5.0
+    maxRecords: 100
+    cities:               # expand as needed
+      - houston
+      - dallas
+      - miami
+      - orlando
+      - phoenix
+      - atlanta
+    selectors:
+      card:    "li.cl-search-result"
+      title:   "a.posting-title span.label"
+      price:   "span.priceinfo"
+      url:     "a.posting-title"
+    fields:
+      - title
+      - price
+      - listingUrl
+      - source: "craigslist-fsbo"
+
+  # ----------------------------------------------------------
+  # Expired Listings
+  # ----------------------------------------------------------
+  expired_realtor:
+    enabled: true
+    type: expired
+    description: >
+      Realtor.com shows listings labelled "Listing Removed" or
+      "Off Market" which often indicate expired MLS contracts.
+    baseUrl: "https://www.realtor.com"
+    searchPath: "/realestateandhomes-search/{state}/?prop_type=single_family&list_price_max=1000000&show_pending_contingent=false"
+    rateLimit: 4.0
+    maxRecords: 150
+    filterDaysOnMarket: 90   # only flag listings DOM >= this value
+    selectors:
+      card:    "[data-testid='card-content']"
+      address: "[data-testid='card-address-1']"
+      price:   "[data-testid='card-price']"
+      dom:     "[data-testid='list-date']"
+      url:     "a[data-testid='card-anchor']"
+    fields:
+      - address
+      - price
+      - daysOnMarket
+      - listingUrl
+      - source: "realtor-expired"
+
+  # ----------------------------------------------------------
+  # Pre-foreclosure / NOD (public county records)
+  # ----------------------------------------------------------
+  preforeclosure_attom:
+    enabled: false          # requires ATTOM Data API key
+    type: preforeclosure
+    description: >
+      ATTOM Data Solutions provides a public-record API for
+      Notice of Default (NOD) and lis pendens filings.
+    apiUrl: "https://api.gateway.attomdata.com/propertyapi/v1.0.0/assessment/basicprofile"
+    apiKeyEnvVar: "ATTOM_API_KEY"
+    rateLimit: 1.0          # API plan throttle
+    maxRecords: 500
+    params:
+      geoIdV4: "{county_fips}"
+      startDate: "{lookback_days}d"
+      orderBy: "fileDate desc"
+    outputFile: "data/leads/preforeclosure-{county}-{date}.json"
+    fields:
+      - identifier.attomId
+      - address.line1
+      - address.city
+      - address.state
+      - address.zipCode
+      - avm.amount.value
+      - source: "attom-nod"
+
+  preforeclosure_county_public:
+    enabled: true
+    type: preforeclosure
+    description: >
+      Many county recorder / clerk websites post NOD and lis
+      pendens lists as downloadable CSVs or searchable pages.
+      Configure per-county URLs below.
+    rateLimit: 6.0
+    counties:
+      - name: "Maricopa County, AZ"
+        url: "https://recorder.maricopa.gov/recdocdata/"
+        format: html
+        selectors:
+          row:    "table.records tr"
+          name:   "td:nth-child(2)"
+          address: "td:nth-child(4)"
+          docType: "td:nth-child(3)"
+        filterDocTypes: ["NOTICE OF TRUSTEE SALE", "LIS PENDENS"]
+      - name: "Harris County, TX"
+        url: "https://www.cclerk.hctx.net/Applications/WebSearch/PR.aspx"
+        format: html
+        note: "Requires POST search form; use agent-browser for JS rendering"
+    outputFile: "data/leads/preforeclosure-county-{date}.json"
+
+  # ----------------------------------------------------------
+  # Probate
+  # ----------------------------------------------------------
+  probate_public_records:
+    enabled: true
+    type: probate
+    description: >
+      Probate filings are public court records. Aggregator sites
+      like ProbateLeads.com and individual state court websites
+      publish estate sale notices.
+    sources:
+      - name: "California Courts Public Search"
+        url: "https://www.courts.ca.gov/find-my-court.htm"
+        note: "Navigate to county court → probate → estate listings"
+        rateLimit: 8.0
+      - name: "Florida Courts E-Filing"
+        url: "https://myeclerk.myorangeclerk.com/"
+        rateLimit: 8.0
+    outputFile: "data/leads/probate-{state}-{date}.json"
+    fields:
+      - decedentName
+      - propertyAddress
+      - estateValue
+      - filingDate
+      - source: "public-probate"
+
+  # ----------------------------------------------------------
+  # Cash Buyers (recent cash sales from public deed records)
+  # ----------------------------------------------------------
+  cashbuyers_public_deeds:
+    enabled: true
+    type: cashbuyer
+    description: >
+      County deed records (publicly filed) show cash purchases
+      where no mortgage is recorded simultaneously. These buyers
+      are prime wholesale end-buyers.
+    rateLimit: 5.0
+    lookbackDays: 90
+    minPurchasePrice: 50000
+    maxPurchasePrice: 800000
+    counties:
+      - "Harris County, TX"
+      - "Miami-Dade County, FL"
+      - "Maricopa County, AZ"
+    outputFile: "data/leads/cashbuyers-{county}-{date}.json"
+    fields:
+      - granteeName
+      - propertyAddress
+      - salePrice
+      - saleDate
+      - source: "public-deed"
+
+  # ----------------------------------------------------------
+  # Landlords (from public rental listings + tax records)
+  # ----------------------------------------------------------
+  landlords_public:
+    enabled: true
+    type: landlord
+    description: >
+      Landlords who own non-owner-occupied rentals are identified
+      via public tax assessor rolls (different mailing vs. property
+      address) and active rental listings on Apartments.com /
+      Craigslist rentals.
+    rateLimit: 4.0
+    maxRecords: 200
+    outputFile: "data/leads/landlords-{state}-{date}.json"
+    fields:
+      - ownerName
+      - mailingAddress
+      - propertyAddress
+      - estimatedUnits
+      - source: "tax-assessor"
+
+# ============================================================
+# Global lead-source defaults
+# ============================================================
+defaults:
+  rateLimit: 3.0
+  maxRecords: 100
+  outputDir: "data/leads"
+  filenameTemplate: "{type}-{source}-{date}.json"
+  dedupeKey: "listingUrl"
+  timeout: 30000
+  retries: 2
+  retryDelay: 5.0
+  # Fields always included regardless of source config:
+  alwaysInclude:
+    - capturedAt      # ISO timestamp of record capture
+    - sourceUrl       # exact URL the data was parsed from
+    - agentVersion    # semver of agent2-leads.js

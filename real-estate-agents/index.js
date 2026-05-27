@@ -1,240 +1,431 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * index.js — Real Estate AI Agent Team CLI
- * ─────────────────────────────────────────
- * Routes /realestate slash-commands to the appropriate agent module.
- *
- * Usage:
- *   node index.js <command> [args]
- *   node index.js --help
+ * Square Centimeter Ltd — AI Agent Team
+ * ════════════════════════════════════════════════════════════════════════════
+ * CLI entry point.  Maps `sc <command>` to the five agent modules.
  *
  * Commands:
- *   crawl   <portal>  [--state ST] [--pages N]
- *   leads   <source>  [--state ST] [--limit N]
- *   analyze           [--input FILE] [--strategy buy-hold|flip|wholesale]
- *   market  <campaign>[--channel email|sms|both] [--leads FILE]
- *   sales             [--leads FILE] [--script cold-call|follow-up|offer] [--crm TYPE]
- *   status
- *   pipeline          [--state ST] [--portal PORTAL] [--limit N]
+ *   sc scan      [--portal P]  [--area A]   [--min-price N] [--max-price N]
+ *                [--pages N]   [--dry-run]
+ *   sc leads     [--source S]  [--type T]   [--all]  [--limit N] [--dry-run]
+ *   sc analyze   [--input F]   [--strategy buy-hold|flip|wholesale]
+ *   sc market    <campaign>    [--channel email|sms|both]  [--leads F]
+ *   sc outreach  [--leads F]   [--script cold-call|follow-up|offer]
+ *   sc report                  [--format text|json|md]
+ *   sc list      [portals|sources|all]
+ *   sc status
+ *   sc pipeline  [--state ST]  [--portal P]  [--limit N]
  */
 
 const { program } = require('commander');
+const fs   = require('fs');
 const path = require('path');
-const createLogger = require('./utils/logger');
-const { statusSummary } = require('./utils/fileStore');
 
-const log = createLogger('index');
+const createLogger      = require('./utils/logger');
+const { statusSummary, DATA_DIR, listFiles } = require('./utils/fileStore');
+
+const log = createLogger('sc');
 
 // ── Agent imports ─────────────────────────────────────────────────────────────
-const crawler   = require('./agents/agent1-crawler');
-const leads     = require('./agents/agent2-leads');
+const scout     = require('./agents/agent1-crawler');
+const finder    = require('./agents/agent2-leads');
 const analyst   = require('./agents/agent3-analyst');
 const marketing = require('./agents/agent4-marketing');
 const sales     = require('./agents/agent5-sales');
 
-// ── CLI definition ────────────────────────────────────────────────────────────
+// ── Error handler wrapper ─────────────────────────────────────────────────────
+/**
+ * Wrap a Commander action so all unhandled errors print a clean message
+ * and exit 1 — instead of printing a raw stack trace.
+ */
+function handle(fn) {
+  return async (...args) => {
+    try {
+      await fn(...args);
+    } catch (err) {
+      log.error(err.message);
+      if (process.env.LOG_LEVEL === 'debug') log.error(err.stack);
+      process.exit(1);
+    }
+  };
+}
+
+// ── CLI ───────────────────────────────────────────────────────────────────────
 
 program
-  .name('realestate')
-  .description('Real Estate AI Agent Team — multi-agent investment pipeline')
+  .name('sc')
+  .description('Square Centimeter Ltd — Prime London Property AI Agent Team')
   .version('1.0.0');
 
-// ── crawl ─────────────────────────────────────────────────────────────────────
+// ── sc scan ───────────────────────────────────────────────────────────────────
 program
-  .command('crawl <portal>')
-  .description('Crawl a real estate portal for property listings')
-  .option('-s, --state <state>', 'US state abbreviation', 'TX')
-  .option('-p, --pages <n>', 'max pages to crawl', parseInt)
-  .action(async (portal, opts) => {
-    try {
-      const records = await crawler.run({ portal, state: opts.state, pages: opts.pages });
-      console.log(`\n✅ Crawled ${records.length} properties from "${portal}" (${opts.state})`);
-    } catch (err) {
-      log.error(err.message);
+  .command('scan')
+  .description('Agent 1 — Scan prime London listings from configured portals')
+  .option('-P, --portal <key>',       'Portal key or "all" (default: all)', 'all')
+  .option('-a, --area <area>',        'Override area list (comma-separated names)')
+  .option('--min-price <n>',          'Minimum price £ (default: 500000)', parseIntArg)
+  .option('--max-price <n>',          'Maximum price £', parseIntArg)
+  .option('-p, --pages <n>',          'Max pages per area', parseIntArg)
+  .option('-n, --dry-run',            'Validate config only — no HTTP requests')
+  .action(handle(async (opts) => {
+    const areas = opts.area ? opts.area.split(',').map((s) => s.trim()) : undefined;
+
+    const records = await scout.run({
+      portal:   opts.portal,
+      areas,
+      minPrice: opts.minPrice,
+      maxPrice: opts.maxPrice,
+      pages:    opts.pages,
+      dryRun:   opts.dryRun,
+    });
+
+    if (opts.dryRun) return;
+
+    const pcl      = records.filter((r) => r.marketZone === 'PCL').length;
+    const pol      = records.filter((r) => r.marketZone === 'POL').length;
+    const emerging = records.filter((r) => r.marketZone === 'EMERGING').length;
+    const flagged  = records.filter((r) => r.flags?.length > 0).length;
+
+    console.log(`\n✅  Scan complete`);
+    console.log(`   ${records.length} listings  |  PCL: ${pcl}  POL: ${pol}  Emerging: ${emerging}`);
+    console.log(`   ${flagged} flagged (motivated vendor / price reduced / short lease)`);
+    console.log(`   → data/raw/listings-${todayStr()}.{json,csv}\n`);
+  }));
+
+// ── sc leads ──────────────────────────────────────────────────────────────────
+program
+  .command('leads')
+  .description('Agent 2 — Find new HNW investor leads from public sources')
+  .option('-s, --source <key>',  'Source key from lead-sources.yml')
+  .option('-t, --type <type>',   'Run first enabled source of this type (cash_buyer, developer, …)')
+  .option('-A, --all',           'Run all enabled sources of the given --type')
+  .option('-l, --limit <n>',     'Max records per source', parseIntArg)
+  .option('-n, --dry-run',       'Validate config only — no HTTP requests')
+  .action(handle(async (opts) => {
+    // Resolve what to run
+    if (!opts.source && !opts.type) {
+      console.error('Specify --source <key> or --type <type>.\nRun "sc list sources" to see options.');
       process.exit(1);
     }
-  });
 
-// ── leads ─────────────────────────────────────────────────────────────────────
-program
-  .command('leads <source>')
-  .description('Harvest motivated-seller or buyer leads from a public source')
-  .option('-s, --state <state>', 'US state abbreviation', 'TX')
-  .option('--city <city>', 'city slug (for Craigslist-style sources)')
-  .option('-l, --limit <n>', 'max records', parseInt)
-  .option('--type <type>', 'lead type filter (fsbo|expired|preforeclosure|probate|cashbuyer|landlord)')
-  .action(async (source, opts) => {
-    try {
-      // Allow passing a type name instead of a source key
-      const resolvedSource = opts.type || source;
-      const records = await leads.run({
-        source: resolvedSource,
-        state: opts.state,
-        city: opts.city,
-        limit: opts.limit,
-      });
-      console.log(`\n✅ Found ${records.length} leads from "${resolvedSource}" (${opts.state})`);
-    } catch (err) {
-      log.error(err.message);
-      process.exit(1);
+    let leads;
+
+    if (opts.all && opts.type) {
+      // Run every enabled source for the given type
+      leads = await finder.runAll({ type: opts.type, limit: opts.limit, dryRun: opts.dryRun });
+    } else {
+      // Single source (resolved by key or by type → first match)
+      const sourceArg = opts.source ?? opts.type;
+      leads = await finder.run({ source: sourceArg, limit: opts.limit, dryRun: opts.dryRun });
     }
-  });
 
-// ── analyze ───────────────────────────────────────────────────────────────────
+    if (opts.dryRun) return;
+
+    const highValue = leads.filter((l) => l.lead_score >= 7).length;
+    console.log(`\n✅  Lead run complete`);
+    console.log(`   ${leads.length} leads found  |  ${highValue} high-value (score ≥ 7)`);
+    console.log(`   → data/leads/raw/leads-*-${todayStr()}.{json,csv}\n`);
+  }));
+
+// ── sc analyze ────────────────────────────────────────────────────────────────
 program
   .command('analyze')
-  .description('Run investment analysis on crawled properties')
-  .option('-i, --input <file>', 'properties JSON file (uses latest if omitted)')
-  .option('-s, --strategy <strategy>', 'buy-hold | flip | wholesale', 'buy-hold')
-  .option('-n, --narratives', 'add LLM deal narratives (requires ANTHROPIC_API_KEY)')
-  .action(async (opts) => {
-    try {
-      const report = await analyst.run({
-        input: opts.input,
-        strategy: opts.strategy,
-        narratives: opts.narratives,
-      });
-      const top5 = report.topDeals.slice(0, 5);
-      console.log(`\n✅ Analyzed ${report.totalAnalyzed} properties | strategy: ${report.strategy}`);
-      console.log('\nTop 5 deals:');
+  .description('Agent 3 — Analyse a property and generate an investment memo')
+  .option('-i, --input <file>',       'Properties JSON file (uses latest if omitted)')
+  .option('-s, --strategy <strategy>','buy-hold | flip | wholesale', 'buy-hold')
+  .option('-n, --narratives',         'Add LLM deal narratives (requires ANTHROPIC_API_KEY)')
+  .action(handle(async (opts) => {
+    const report = await analyst.run({
+      input:      opts.input,
+      strategy:   opts.strategy,
+      narratives: opts.narratives,
+    });
+
+    const top5 = (report.topDeals ?? []).slice(0, 5);
+    console.log(`\n✅  Analysis complete — strategy: ${report.strategy}`);
+    console.log(`   ${report.totalAnalyzed} properties analysed`);
+    if (top5.length) {
+      console.log('\n   Top opportunities:');
       top5.forEach((d, i) =>
-        console.log(`  ${i + 1}. [${d.score}/100] ${d.address || 'N/A'} — ${d.rawPrice || 'no price'}`),
+        console.log(`   ${i + 1}. [${d.score}/100] ${d.address ?? 'N/A'} — ${d.rawPrice ?? 'no price'}`)
       );
-    } catch (err) {
-      log.error(err.message);
-      process.exit(1);
     }
-  });
+    console.log(`   → reports/\n`);
+  }));
 
-// ── market ────────────────────────────────────────────────────────────────────
+// ── sc market ─────────────────────────────────────────────────────────────────
 program
-  .command('market <campaign>')
-  .description('Draft personalised outreach campaigns for leads')
-  .option('-c, --channel <channel>', 'email | sms | both', 'email')
-  .option('-l, --leads <file>', 'leads JSON file (uses latest if omitted)')
-  .option('--limit <n>', 'max leads to draft for', parseInt)
-  .action(async (campaign, opts) => {
-    try {
-      const drafts = await marketing.run({
-        campaign,
-        channel: opts.channel,
-        leadsFile: opts.leads,
-        limit: opts.limit,
-      });
-      console.log(`\n✅ Drafted ${drafts.length} messages | campaign: ${campaign} | channel: ${opts.channel}`);
-    } catch (err) {
-      log.error(err.message);
-      process.exit(1);
-    }
-  });
+  .command('market [campaign]')
+  .description('Agent 4 — Draft investor outreach and marketing content')
+  .option('-c, --channel <channel>',  'email | sms | both', 'email')
+  .option('-l, --leads <file>',       'Leads JSON file (uses latest if omitted)')
+  .option('--limit <n>',              'Max leads to draft for', parseIntArg)
+  .action(handle(async (campaign = 'motivated-sellers', opts) => {
+    const drafts = await marketing.run({
+      campaign,
+      channel:   opts.channel,
+      leadsFile: opts.leads,
+      limit:     opts.limit,
+    });
+    console.log(`\n✅  Marketing drafts complete`);
+    console.log(`   ${drafts.length} messages drafted | campaign: ${campaign} | channel: ${opts.channel}`);
+    console.log(`   → outputs/marketing-${campaign}-${todayStr()}/\n`);
+  }));
 
-// ── sales ─────────────────────────────────────────────────────────────────────
+// ── sc outreach ───────────────────────────────────────────────────────────────
 program
-  .command('sales')
-  .description('Generate call scripts and CRM notes for leads')
-  .option('-l, --leads <file>', 'leads JSON file (uses latest if omitted)')
-  .option('-s, --script <type>', 'cold-call | follow-up | offer', 'cold-call')
-  .option('--crm <format>', 'hubspot | podio | generic', 'generic')
-  .option('--limit <n>', 'max leads to process', parseInt)
-  .action(async (opts) => {
-    try {
-      const results = await sales.run({
-        leadsFile: opts.leads,
-        script: opts.script,
-        crm: opts.crm,
-        limit: opts.limit,
-      });
-      console.log(`\n✅ Generated ${results.length} scripts | type: ${opts.script} | crm: ${opts.crm}`);
-    } catch (err) {
-      log.error(err.message);
-      process.exit(1);
-    }
-  });
+  .command('outreach')
+  .description('Agent 5 — Prepare investor outreach and qualification list')
+  .option('-l, --leads <file>',       'Leads JSON file (uses latest if omitted)')
+  .option('-s, --script <type>',      'cold-call | follow-up | offer', 'cold-call')
+  .option('--crm <format>',           'hubspot | podio | generic', 'generic')
+  .option('--limit <n>',              'Max leads to process', parseIntArg)
+  .action(handle(async (opts) => {
+    const results = await sales.run({
+      leadsFile: opts.leads,
+      script:    opts.script,
+      crm:       opts.crm,
+      limit:     opts.limit,
+    });
+    console.log(`\n✅  Outreach prep complete`);
+    console.log(`   ${results.length} contact briefs generated | script: ${opts.script}`);
+    console.log(`   → data/leads/qualified/\n`);
+  }));
 
-// ── status ────────────────────────────────────────────────────────────────────
+// ── sc report ─────────────────────────────────────────────────────────────────
+program
+  .command('report')
+  .description('Generate a full pipeline summary across all agents')
+  .option('-f, --format <fmt>',  'text | json | md', 'text')
+  .action(handle(async (opts) => {
+    const report = buildPipelineReport();
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    if (opts.format === 'md') {
+      console.log(formatReportMarkdown(report));
+      return;
+    }
+
+    printReportText(report);
+  }));
+
+// ── sc list ───────────────────────────────────────────────────────────────────
+program
+  .command('list [what]')
+  .description('List configured portals, lead sources, or both  (portals | sources | all)')
+  .action(handle(async (what = 'all') => {
+    const showPortals = what === 'all' || what === 'portals';
+    const showSources = what === 'all' || what === 'sources';
+
+    if (showPortals) {
+      const portals = scout.listPortals();
+      console.log('\n📡  Portals (portals.yml)\n');
+      console.log(
+        '  Key             Enabled  Areas  Req/s  JS    Base URL'
+      );
+      console.log('  ' + '─'.repeat(70));
+      for (const p of portals) {
+        const enabled  = p.enabled ? '✓' : '✗';
+        const js       = p.jsRendered ? 'yes' : 'no';
+        const rps      = (1 / (p.rateLimit ?? 1)).toFixed(1);
+        console.log(
+          `  ${p.key.padEnd(15)} ${enabled.padEnd(8)} ${String(p.areaCount).padEnd(6)} ` +
+          `${rps.padEnd(6)} ${js.padEnd(5)} ${p.baseUrl}`
+        );
+      }
+    }
+
+    if (showSources) {
+      const sources = finder.listSources();
+      console.log('\n🔍  Lead Sources (lead-sources.yml)\n');
+      console.log('  Key                          Enabled  Type             Req/s  Max');
+      console.log('  ' + '─'.repeat(72));
+      for (const s of sources) {
+        const enabled = s.enabled ? '✓' : '✗';
+        const rps     = (1 / (s.rateLimit ?? 1)).toFixed(1);
+        console.log(
+          `  ${s.key.padEnd(28)} ${enabled.padEnd(8)} ${s.type.padEnd(16)} ` +
+          `${rps.padEnd(6)} ${s.maxRecords ?? '?'}`
+        );
+      }
+    }
+
+    console.log('');
+  }));
+
+// ── sc status ─────────────────────────────────────────────────────────────────
 program
   .command('status')
-  .description('Print a summary of all data files and recent agent runs')
-  .action(() => {
-    const summary = statusSummary();
-    console.log('\n📊 Real Estate Agent Team — Data Status\n');
-    console.log('  Directory         Files   Latest file');
-    console.log('  ─────────────── ─────── ─────────────────────────────────');
-    for (const [dir, info] of Object.entries(summary)) {
-      const files = String(info.files).padStart(7);
-      const latest = info.latestFile || '(none)';
-      console.log(`  ${dir.padEnd(16)} ${files}   ${latest}`);
-    }
-    console.log('');
-  });
+  .description('Show data file counts and latest activity')
+  .action(handle(async () => {
+    const dirs = [
+      { key: 'raw',              label: 'Listings        (data/raw/)' },
+      { key: 'leads/raw',        label: 'Raw leads       (data/leads/raw/)' },
+      { key: 'leads/qualified',  label: 'Qualified leads (data/leads/qualified/)' },
+      { key: 'leads/contacted',  label: 'Contacted       (data/leads/contacted/)' },
+      { key: 'reports',          label: 'Investment memos (reports/)' },
+      { key: 'outputs',          label: 'Marketing output (outputs/)' },
+    ];
 
-// ── pipeline ──────────────────────────────────────────────────────────────────
+    console.log('\n📊  Square Centimeter — Data Status\n');
+    console.log('  Directory                         Files  Records   Latest file');
+    console.log('  ' + '─'.repeat(72));
+
+    for (const { key, label } of dirs) {
+      const files = safeListFiles(key);
+      const latest  = files[0] ? path.basename(files[0]) : '(none)';
+      const records = countRecords(files[0]);
+      console.log(
+        `  ${label.padEnd(36)} ${String(files.length).padStart(5)}  ` +
+        `${String(records ?? '–').padStart(7)}   ${latest}`
+      );
+    }
+
+    // Scan history last entry
+    const histPath = path.join(DATA_DIR, 'scan-history.tsv');
+    if (fs.existsSync(histPath)) {
+      const lines = fs.readFileSync(histPath, 'utf8').trim().split('\n');
+      const last  = lines[lines.length - 1];
+      if (last && !last.startsWith('timestamp')) {
+        const [ts, portals, count] = last.split('\t');
+        console.log(`\n  Last scan: ${ts}  |  portals: ${portals}  |  records: ${count}`);
+      }
+    }
+
+    // Pipeline items
+    const pipelinePath = path.join(DATA_DIR, 'pipeline.md');
+    if (fs.existsSync(pipelinePath)) {
+      const content   = fs.readFileSync(pipelinePath, 'utf8');
+      const unchecked = (content.match(/\- \[ \]/g) ?? []).length;
+      if (unchecked > 0) {
+        console.log(`\n  ⚠️   ${unchecked} item(s) awaiting Julian Noble's review in data/pipeline.md`);
+      }
+    }
+
+    console.log('');
+  }));
+
+// ── sc pipeline ───────────────────────────────────────────────────────────────
 program
   .command('pipeline')
-  .description('Run the full end-to-end pipeline: crawl → leads → analyze → market → sales')
-  .option('-s, --state <state>', 'US state abbreviation', 'TX')
-  .option('-P, --portal <portal>', 'portal to crawl', 'zillow')
-  .option('--lead-source <source>', 'lead source key', 'fsbo_zillow')
-  .option('-n, --limit <n>', 'max records per stage', parseInt)
-  .option('--strategy <strategy>', 'analysis strategy', 'buy-hold')
-  .option('--campaign <campaign>', 'marketing campaign', 'motivated-sellers')
-  .option('--channel <channel>', 'marketing channel', 'email')
-  .action(async (opts) => {
-    console.log('\n🚀 Starting full pipeline…\n');
+  .description('Run the full end-to-end pipeline: scan → leads → analyze → market → outreach')
+  .option('-P, --portal <key>',       'Portal to scan', 'rightmove')
+  .option('-t, --lead-type <type>',   'Lead type to source', 'cash_buyer')
+  .option('--min-price <n>',          'Minimum listing price £', parseIntArg)
+  .option('--strategy <strategy>',    'Analysis strategy', 'buy-hold')
+  .option('--campaign <campaign>',    'Marketing campaign', 'motivated-sellers')
+  .option('-l, --limit <n>',          'Record cap per stage', parseIntArg)
+  .action(handle(async (opts) => {
+    console.log('\n🚀  Starting full pipeline — Square Centimeter Ltd\n');
 
-    try {
-      // Stage 1: Crawl
-      console.log('Stage 1/5 — Crawling properties…');
-      const properties = await crawler.run({
-        portal: opts.portal,
-        state: opts.state,
-        pages: opts.limit ? Math.ceil(opts.limit / 20) : 3,
-      });
-      console.log(`  ✓ ${properties.length} properties crawled\n`);
+    // ── Stage 1: Scan ────────────────────────────────────────────────────
+    console.log('Stage 1/5 — Scanning listings…');
+    const listings = await scout.run({
+      portal:   opts.portal,
+      minPrice: opts.minPrice,
+      pages:    opts.limit ? Math.ceil(opts.limit / 24) : 3,
+    });
+    console.log(`  ✓ ${listings.length} listings collected\n`);
 
-      // Stage 2: Leads
-      console.log('Stage 2/5 — Finding leads…');
-      const leadRecords = await leads.run({
-        source: opts.leadSource,
-        state: opts.state,
-        limit: opts.limit,
-      });
-      console.log(`  ✓ ${leadRecords.length} leads found\n`);
+    // ── Stage 2: Leads ───────────────────────────────────────────────────
+    console.log('Stage 2/5 — Finding investor leads…');
+    const leads = await finder.runAll({ type: opts.leadType ?? 'cash_buyer', limit: opts.limit });
+    console.log(`  ✓ ${leads.length} leads found\n`);
 
-      // Stage 3: Analyze
-      console.log('Stage 3/5 — Analyzing deals…');
-      const report = await analyst.run({ strategy: opts.strategy });
-      console.log(`  ✓ ${report.totalAnalyzed} properties analyzed | top score: ${report.topDeals[0]?.score ?? 'N/A'}\n`);
+    // ── Stage 3: Analyse ─────────────────────────────────────────────────
+    console.log('Stage 3/5 — Running investment analysis…');
+    const report = await analyst.run({ strategy: opts.strategy });
+    console.log(`  ✓ ${report.totalAnalyzed ?? 0} properties analysed | top score: ${report.topDeals?.[0]?.score ?? 'N/A'}\n`);
 
-      // Stage 4: Marketing drafts
-      console.log('Stage 4/5 — Drafting marketing messages…');
-      const drafts = await marketing.run({
-        campaign: opts.campaign,
-        channel: opts.channel,
-        limit: opts.limit || 50,
-      });
-      console.log(`  ✓ ${drafts.length} messages drafted\n`);
+    // ── Stage 4: Marketing ───────────────────────────────────────────────
+    console.log('Stage 4/5 — Drafting marketing content…');
+    const drafts = await marketing.run({ campaign: opts.campaign, limit: opts.limit ?? 50 });
+    console.log(`  ✓ ${drafts.length} drafts prepared\n`);
 
-      // Stage 5: Sales scripts
-      console.log('Stage 5/5 — Generating sales scripts…');
-      const scripts = await sales.run({
-        script: 'cold-call',
-        limit: opts.limit || 25,
-      });
-      console.log(`  ✓ ${scripts.length} scripts generated\n`);
+    // ── Stage 5: Outreach prep ───────────────────────────────────────────
+    console.log('Stage 5/5 — Preparing outreach briefs…');
+    const scripts = await sales.run({ script: 'cold-call', limit: opts.limit ?? 25 });
+    console.log(`  ✓ ${scripts.length} contact briefs generated\n`);
 
-      console.log('✅ Pipeline complete! Run "status" to see all output files.');
-    } catch (err) {
-      log.error(`Pipeline failed: ${err.message}`);
-      process.exit(1);
-    }
-  });
+    console.log('✅  Pipeline complete. Run "sc status" to see all output files.\n');
+  }));
 
 // ── Parse ─────────────────────────────────────────────────────────────────────
 program.parse(process.argv);
 
-// Show help if no command given
-if (process.argv.length < 3) {
-  program.help();
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function parseIntArg(val) {
+  const n = parseInt(val, 10);
+  return isNaN(n) ? undefined : n;
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function safeListFiles(subdir) {
+  try { return listFiles(subdir); } catch (_) { return []; }
+}
+
+/** Count records in the most-recent JSON file for a subdir */
+function countRecords(filePath) {
+  if (!filePath || !filePath.endsWith('.json')) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return Array.isArray(data) ? data.length : 1;
+  } catch (_) { return null; }
+}
+
+// ── Report builders ───────────────────────────────────────────────────────────
+
+function buildPipelineReport() {
+  const rawFiles = safeListFiles('raw');
+  const leadFiles = safeListFiles('leads/raw');
+  const qualFiles = safeListFiles('leads/qualified');
+  const reportFiles = safeListFiles('reports');
+
+  const totalListings = rawFiles.reduce((n, f) => n + (countRecords(f) ?? 0), 0);
+  const totalLeads    = leadFiles.reduce((n, f) => n + (countRecords(f) ?? 0), 0);
+  const totalQual     = qualFiles.reduce((n, f) => n + (countRecords(f) ?? 0), 0);
+
+  return {
+    generatedAt:    new Date().toISOString(),
+    listings:       { files: rawFiles.length,    totalRecords: totalListings, latestFile: rawFiles[0]   ? path.basename(rawFiles[0])   : null },
+    rawLeads:       { files: leadFiles.length,   totalRecords: totalLeads,   latestFile: leadFiles[0]  ? path.basename(leadFiles[0])  : null },
+    qualifiedLeads: { files: qualFiles.length,   totalRecords: totalQual,    latestFile: qualFiles[0]  ? path.basename(qualFiles[0])  : null },
+    memos:          { files: reportFiles.length,                              latestFile: reportFiles[0]? path.basename(reportFiles[0]): null },
+  };
+}
+
+function printReportText(r) {
+  const line = (label, val) => console.log(`  ${label.padEnd(30)} ${val}`);
+  console.log('\n📋  Square Centimeter — Pipeline Report');
+  console.log(`    Generated: ${r.generatedAt}\n`);
+  line('Listings collected:',  `${r.listings.totalRecords} records across ${r.listings.files} files`);
+  line('Latest scan:',         r.listings.latestFile ?? '(none)');
+  line('Raw leads:',           `${r.rawLeads.totalRecords} leads across ${r.rawLeads.files} files`);
+  line('Qualified leads:',     `${r.qualifiedLeads.totalRecords} in pipeline`);
+  line('Investment memos:',    `${r.memos.files} memos`);
+  console.log('');
+}
+
+function formatReportMarkdown(r) {
+  return [
+    '# Square Centimeter — Pipeline Report',
+    `_Generated: ${r.generatedAt}_`,
+    '',
+    '| Stage | Files | Records | Latest |',
+    '|-------|------:|--------:|--------|',
+    `| Listings | ${r.listings.files} | ${r.listings.totalRecords} | ${r.listings.latestFile ?? '–'} |`,
+    `| Raw Leads | ${r.rawLeads.files} | ${r.rawLeads.totalRecords} | ${r.rawLeads.latestFile ?? '–'} |`,
+    `| Qualified Leads | ${r.qualifiedLeads.files} | ${r.qualifiedLeads.totalRecords} | ${r.qualifiedLeads.latestFile ?? '–'} |`,
+    `| Investment Memos | ${r.memos.files} | – | ${r.memos.latestFile ?? '–'} |`,
+    '',
+  ].join('\n');
 }

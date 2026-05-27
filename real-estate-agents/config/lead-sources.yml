@@ -1,235 +1,311 @@
 # ============================================================
-# Lead Source Configuration
+# Square Centimeter Ltd — Investor Lead Source Configuration
 # ============================================================
-# Configures agent2-leads.js for each motivated-seller / buyer
-# lead source.  All sources must be publicly accessible without
-# authentication, or use a documented public API.
+# Controls agent2-leads.js (Investor Lead Finder).
 #
 # Lead types:
-#   fsbo        – For Sale By Owner (owner self-listed)
-#   expired     – MLS listings whose contract expired
-#   preforeclosure – NOD / lis pendens from county records
-#   probate     – Estate sales from probate court filings
-#   cashbuyer   – Recent cash purchases (flippers / investors)
-#   landlord    – Landlord / rental property owners
+#   cash_buyer      – Recent high-value cash purchasers (HMLR data)
+#   developer       – Property development companies (Companies House)
+#   hnw_investor    – High-net-worth individuals with stated London interest
+#   family_office   – Family offices and wealth management vehicles
+#   motivated_vendor – Vendors signalling urgency (estate sales, corporate disposals)
+#   expat           – Overseas buyers / non-dom individuals
+#
+# All sources must be publicly accessible without authentication
+# (or via a documented free/registered public API).
+# Public data only — no private records, no scraping gated content.
 # ============================================================
+
+# ── Scoring weights ────────────────────────────────────────────────────────
+# These mirror CLAUDE.md § Lead Scoring Weights
+lead_score_weights:
+  investment_intent_signal: 0.40   # clear intent to acquire London property
+  capital_capacity:         0.25   # budget aligned with prime market (£500k+)
+  accessibility:            0.20   # contactable via public profile or warm intro
+  strategic_fit:            0.15   # aligns with SC advisory focus
+
+# ── Score band definitions (1–10 per dimension) ────────────────────────────
+score_bands:
+  investment_intent_signal:
+    10: "Active acquirer — recent HMLR transaction or stated acquisition programme"
+    8:  "Seeking advisory — mentioned London property investment publicly"
+    6:  "Attended property investment conference or event"
+    4:  "General HNWI with no explicit London property signal"
+    2:  "Tangential — property adjacent but no direct London intent"
+  capital_capacity:
+    10: "Verified transaction >£5m (HMLR or press)"
+    8:  "Transaction or stated budget £2m–£5m"
+    6:  "Transaction or stated budget £1m–£2m"
+    4:  "Transaction or stated budget £500k–£1m"
+    2:  "Budget unclear but profile suggests capacity"
+  accessibility:
+    10: "Direct contact details in public filing or press"
+    8:  "Active LinkedIn with contact option; company contact known"
+    6:  "Company contact page; named director reachable via Companies House"
+    4:  "Named in public record — no direct contact"
+    2:  "Anonymous or indirect signal only"
+  strategic_fit:
+    10: "Non-dom / overseas family office — core SC client profile"
+    8:  "International developer or co-investment seeker"
+    6:  "UK-based HNWI acquiring PCL / POL"
+    4:  "Broader London investor; zone unclear"
+    2:  "Residential investor outside SC focus areas"
 
 sources:
 
-  # ----------------------------------------------------------
-  # FSBO — For Sale By Owner
-  # ----------------------------------------------------------
-  fsbo_zillow:
+  # ──────────────────────────────────────────────────────────
+  # HM Land Registry — Price Paid Data
+  # Free public API. Returns residential transactions above
+  # a price threshold in specified postcodes.
+  # Useful for: identifying recent cash buyers (no concurrent
+  # mortgage registration = strong cash buyer signal).
+  # ──────────────────────────────────────────────────────────
+  land_registry_price_paid:
     enabled: true
-    type: fsbo
-    baseUrl: "https://www.zillow.com"
-    searchPath: "/homes/fsbo/{state}_rb/"
-    rateLimit: 4.0
-    maxRecords: 200
-    dedupeKey: "listingUrl"
-    outputFile: "data/leads/fsbo-zillow-{state}-{date}.json"
-    selectors:
-      card:    "article[data-test='property-card']"
-      address: "[data-test='property-card-addr']"
-      price:   "[data-test='property-card-price']"
-      url:     "a[data-test='property-card-link']"
-    fields:
-      - address
-      - price
-      - listingUrl
-      - source: "zillow-fsbo"
-
-  fsbo_craigslist:
-    enabled: true
-    type: fsbo
-    # Uses Craigslist's public search (no auth required)
-    baseUrl: "https://{city}.craigslist.org"
-    searchPath: "/search/rea?sale_date=all+dates&query=for+sale+by+owner"
-    rateLimit: 5.0
-    maxRecords: 100
-    cities:               # expand as needed
-      - houston
-      - dallas
-      - miami
-      - orlando
-      - phoenix
-      - atlanta
-    selectors:
-      card:    "li.cl-search-result"
-      title:   "a.posting-title span.label"
-      price:   "span.priceinfo"
-      url:     "a.posting-title"
-    fields:
-      - title
-      - price
-      - listingUrl
-      - source: "craigslist-fsbo"
-
-  # ----------------------------------------------------------
-  # Expired Listings
-  # ----------------------------------------------------------
-  expired_realtor:
-    enabled: true
-    type: expired
-    description: >
-      Realtor.com shows listings labelled "Listing Removed" or
-      "Off Market" which often indicate expired MLS contracts.
-    baseUrl: "https://www.realtor.com"
-    searchPath: "/realestateandhomes-search/{state}/?prop_type=single_family&list_price_max=1000000&show_pending_contingent=false"
-    rateLimit: 4.0
-    maxRecords: 150
-    filterDaysOnMarket: 90   # only flag listings DOM >= this value
-    selectors:
-      card:    "[data-testid='card-content']"
-      address: "[data-testid='card-address-1']"
-      price:   "[data-testid='card-price']"
-      dom:     "[data-testid='list-date']"
-      url:     "a[data-testid='card-anchor']"
-    fields:
-      - address
-      - price
-      - daysOnMarket
-      - listingUrl
-      - source: "realtor-expired"
-
-  # ----------------------------------------------------------
-  # Pre-foreclosure / NOD (public county records)
-  # ----------------------------------------------------------
-  preforeclosure_attom:
-    enabled: false          # requires ATTOM Data API key
-    type: preforeclosure
-    description: >
-      ATTOM Data Solutions provides a public-record API for
-      Notice of Default (NOD) and lis pendens filings.
-    apiUrl: "https://api.gateway.attomdata.com/propertyapi/v1.0.0/assessment/basicprofile"
-    apiKeyEnvVar: "ATTOM_API_KEY"
-    rateLimit: 1.0          # API plan throttle
+    type: cash_buyer
+    description: "HMLR Price Paid — public residential transactions, London PCL/POL"
+    apiUrl: "https://landregistry.data.gov.uk/data/ppi/transaction-record.json"
+    rateLimit: 1.0
     maxRecords: 500
+    dedupeKey: "transactionId"     # unique per HMLR transaction
     params:
-      geoIdV4: "{county_fips}"
-      startDate: "{lookback_days}d"
-      orderBy: "fileDate desc"
-    outputFile: "data/leads/preforeclosure-{county}-{date}.json"
+      propertyType: "D,S,T,F"        # detached, semi, terraced, flat
+      estateType: "F"                # freehold only first pass (override per run)
+      minPrice: 500000
+      postcodes:                     # PCL/POL outcode list
+        - SW1
+        - SW3
+        - SW7
+        - SW10
+        - W1
+        - W8
+        - WC2
+        - EC1
+        - E1W
+        - SW11
+        - W11
+        - SW8
+      lookbackDays: 180
+    outputFile: "data/leads/raw/leads-land-registry-{date}.csv"
     fields:
-      - identifier.attomId
-      - address.line1
-      - address.city
-      - address.state
-      - address.zipCode
-      - avm.amount.value
-      - source: "attom-nod"
+      - transactionId
+      - price
+      - dateOfTransfer
+      - postcode
+      - propertyType
+      - newBuildFlag
+      - estateType
+      - paon          # primary addressable object name (house name/number)
+      - saon          # secondary (flat/unit)
+      - street
+      - town
+      - district
+      - county
+      - ppdCategory   # A=standard, B=additional (e.g. buy-to-let)
 
-  preforeclosure_county_public:
+  # ──────────────────────────────────────────────────────────
+  # Companies House — Property & Investment Companies
+  # Free public API (requires free API key registration).
+  # Identifies: SPV/holding companies for London property,
+  # overseas-registered companies with London addresses,
+  # recently incorporated property development companies.
+  # ──────────────────────────────────────────────────────────
+  companies_house:
     enabled: true
-    type: preforeclosure
-    description: >
-      Many county recorder / clerk websites post NOD and lis
-      pendens lists as downloadable CSVs or searchable pages.
-      Configure per-county URLs below.
-    rateLimit: 6.0
-    counties:
-      - name: "Maricopa County, AZ"
-        url: "https://recorder.maricopa.gov/recdocdata/"
-        format: html
-        selectors:
-          row:    "table.records tr"
-          name:   "td:nth-child(2)"
-          address: "td:nth-child(4)"
-          docType: "td:nth-child(3)"
-        filterDocTypes: ["NOTICE OF TRUSTEE SALE", "LIS PENDENS"]
-      - name: "Harris County, TX"
-        url: "https://www.cclerk.hctx.net/Applications/WebSearch/PR.aspx"
-        format: html
-        note: "Requires POST search form; use agent-browser for JS rendering"
-    outputFile: "data/leads/preforeclosure-county-{date}.json"
-
-  # ----------------------------------------------------------
-  # Probate
-  # ----------------------------------------------------------
-  probate_public_records:
-    enabled: true
-    type: probate
-    description: >
-      Probate filings are public court records. Aggregator sites
-      like ProbateLeads.com and individual state court websites
-      publish estate sale notices.
-    sources:
-      - name: "California Courts Public Search"
-        url: "https://www.courts.ca.gov/find-my-court.htm"
-        note: "Navigate to county court → probate → estate listings"
-        rateLimit: 8.0
-      - name: "Florida Courts E-Filing"
-        url: "https://myeclerk.myorangeclerk.com/"
-        rateLimit: 8.0
-    outputFile: "data/leads/probate-{state}-{date}.json"
-    fields:
-      - decedentName
-      - propertyAddress
-      - estateValue
-      - filingDate
-      - source: "public-probate"
-
-  # ----------------------------------------------------------
-  # Cash Buyers (recent cash sales from public deed records)
-  # ----------------------------------------------------------
-  cashbuyers_public_deeds:
-    enabled: true
-    type: cashbuyer
-    description: >
-      County deed records (publicly filed) show cash purchases
-      where no mortgage is recorded simultaneously. These buyers
-      are prime wholesale end-buyers.
-    rateLimit: 5.0
-    lookbackDays: 90
-    minPurchasePrice: 50000
-    maxPurchasePrice: 800000
-    counties:
-      - "Harris County, TX"
-      - "Miami-Dade County, FL"
-      - "Maricopa County, AZ"
-    outputFile: "data/leads/cashbuyers-{county}-{date}.json"
-    fields:
-      - granteeName
-      - propertyAddress
-      - salePrice
-      - saleDate
-      - source: "public-deed"
-
-  # ----------------------------------------------------------
-  # Landlords (from public rental listings + tax records)
-  # ----------------------------------------------------------
-  landlords_public:
-    enabled: true
-    type: landlord
-    description: >
-      Landlords who own non-owner-occupied rentals are identified
-      via public tax assessor rolls (different mailing vs. property
-      address) and active rental listings on Apartments.com /
-      Craigslist rentals.
-    rateLimit: 4.0
+    type: developer
+    description: "Companies House — property holding companies, SPVs, developers"
+    apiUrl: "https://api.company-information.service.gov.uk"
+    apiKeyEnvVar: "COMPANIES_HOUSE_API_KEY"
+    rateLimit: 0.5                   # CH rate limit: 600 req/5min
     maxRecords: 200
-    outputFile: "data/leads/landlords-{state}-{date}.json"
+    searchTerms:
+      - "prime London property"
+      - "London residential investment"
+      - "PCL property"
+      - "London real estate fund"
+      - "Chelsea properties"
+      - "Mayfair properties"
+    filters:
+      status: "active"
+      companyType:
+        - "ltd"
+        - "private-unlimited"
+        - "llp"
+      incorporatedAfter: "2018-01-01"
+      sicCodes:
+        - "68100"   # buying/selling own real estate
+        - "68209"   # other letting/operating
+        - "68320"   # management of real estate on a fee or contract basis
+        - "64205"   # activities of financial holding companies
+    outputFile: "data/leads/raw/leads-companies-house-{date}.csv"
     fields:
-      - ownerName
-      - mailingAddress
-      - propertyAddress
-      - estimatedUnits
-      - source: "tax-assessor"
+      - company_name
+      - company_number
+      - date_of_creation
+      - company_type
+      - registered_office_address
+      - sic_codes
+      - nationality_of_control  # persons with significant control
+      - psc_nationality
+
+  # ──────────────────────────────────────────────────────────
+  # LinkedIn Public Search
+  # Public profile search only — no authenticated scraping.
+  # Rate limit: conservative, with jitter.
+  # Targets: property investors, family office principals,
+  # wealth managers, overseas buyers posting London content.
+  # ──────────────────────────────────────────────────────────
+  linkedin_public:
+    enabled: true
+    type: hnw_investor
+    description: "LinkedIn public search — HNW investors with London property interest"
+    baseUrl: "https://www.linkedin.com"
+    searchPath: "/search/results/people/?keywords={query}&origin=GLOBAL_SEARCH_HEADER"
+    rateLimit: 3.0                   # LinkedIn is very rate-limit sensitive
+    maxRecords: 50
+    jsRendered: true                 # requires agent-browser
+    searchQueries:
+      - "prime London property investor"
+      - "family office London real estate"
+      - "luxury property London investor"
+      - "London property portfolio"
+      - "PCL residential investor"
+    selectors:
+      card:     ".reusable-search__result-container"
+      name:     ".entity-result__title-text"
+      headline: ".entity-result__primary-subtitle"
+      location: ".entity-result__secondary-subtitle"
+      url:      "a.app-aware-link"
+    outputFile: "data/leads/raw/leads-linkedin-{date}.csv"
+    fields:
+      - name
+      - headline
+      - location
+      - linkedinUrl
+      - inferredNationality  # parsed from location/name signals, never stored as fact
+      - source: "linkedin-public"
+
+  # ──────────────────────────────────────────────────────────
+  # Property Week / Estates Gazette — Deal Announcements
+  # Public news articles mentioning acquisitions, launches,
+  # investor profiles in the London market.
+  # ──────────────────────────────────────────────────────────
+  property_press:
+    enabled: true
+    type: hnw_investor
+    description: "Property press — named investors in public deal announcements"
+    rateLimit: 2.0
+    maxRecords: 100
+    jsRendered: false
+    sources:
+      - name: "Property Week"
+        baseUrl: "https://www.propertyweek.com"
+        searchPath: "/news?q={query}&type=news"
+        selectors:
+          article: "article.search-result"
+          headline: "h3.search-result__title"
+          url: "a.search-result__link"
+          snippet: ".search-result__summary"
+      - name: "CoStar UK"
+        baseUrl: "https://www.costar.com"
+        searchPath: "/news?region=uk&q={query}"
+        selectors:
+          article: ".news-article-item"
+          headline: ".news-article-item__title"
+          url: "a.news-article-item__link"
+    searchQueries:
+      - "prime London residential acquisition"
+      - "London property investment family office"
+      - "luxury London apartment buyer"
+    outputFile: "data/leads/raw/leads-press-{date}.csv"
+    fields:
+      - name
+      - context
+      - articleUrl
+      - articleDate
+      - source
+
+  # ──────────────────────────────────────────────────────────
+  # Expat & Non-Dom Community Forums
+  # Public posts on property forums where international buyers
+  # ask about London acquisitions (public threads only).
+  # ──────────────────────────────────────────────────────────
+  expat_forums:
+    enabled: false          # enable selectively — high false-positive rate
+    type: expat
+    description: "Public expat forums — overseas buyers researching London property"
+    rateLimit: 2.0
+    maxRecords: 50
+    jsRendered: false
+    sources:
+      - name: "British Expats Forum"
+        baseUrl: "https://www.britishexpats.com"
+        searchPath: "/forum/search.php?q={query}&forums[]=25"  # Property forum
+        selectors:
+          post:    ".postcontainer"
+          author:  ".username"
+          content: ".post-content"
+          url:     "a.postcounter"
+    searchQueries:
+      - "buy London apartment"
+      - "prime London property non-dom"
+    outputFile: "data/leads/raw/leads-expat-{date}.csv"
+    fields:
+      - username
+      - postSnippet
+      - postUrl
+      - source: "expat-forum"
+
+  # ──────────────────────────────────────────────────────────
+  # HMLR PSC Register (Persons with Significant Control)
+  # Cross-references Companies House PSC data to surface
+  # overseas principals controlling UK property vehicles.
+  # ──────────────────────────────────────────────────────────
+  psc_overseas:
+    enabled: true
+    type: family_office
+    description: "PSC Register — overseas persons controlling London property SPVs"
+    apiUrl: "https://api.company-information.service.gov.uk/persons-with-significant-control-statements"
+    apiKeyEnvVar: "COMPANIES_HOUSE_API_KEY"
+    rateLimit: 0.5
+    maxRecords: 100
+    filters:
+      nationality:
+        - "Saudi Arabian"
+        - "Emirati"
+        - "Qatari"
+        - "Kuwaiti"
+        - "Chinese"
+        - "Hong Kong"
+        - "Singaporean"
+        - "Malaysian"
+        - "Russian"
+        - "Swiss"
+        - "American"
+    outputFile: "data/leads/raw/leads-psc-{date}.csv"
+    fields:
+      - name
+      - nationality
+      - countryOfResidence
+      - companyName
+      - companyNumber
+      - naturesOfControl
+      - source: "companies-house-psc"
 
 # ============================================================
 # Global lead-source defaults
 # ============================================================
 defaults:
-  rateLimit: 3.0
+  rateLimit: 1.0
   maxRecords: 100
-  outputDir: "data/leads"
-  filenameTemplate: "{type}-{source}-{date}.json"
-  dedupeKey: "listingUrl"
   timeout: 30000
   retries: 2
-  retryDelay: 5.0
-  # Fields always included regardless of source config:
+  retryDelay: 6.0
+  dedupeKey: "linkedinUrl"          # fallback; overridden per source
+  outputDir: "data/leads/raw"
   alwaysInclude:
-    - capturedAt      # ISO timestamp of record capture
-    - sourceUrl       # exact URL the data was parsed from
-    - agentVersion    # semver of agent2-leads.js
+    - capturedAt                    # ISO capture timestamp
+    - sourceUrl                     # exact URL parsed from
+    - agentVersion                  # semver string
+    - lead_score                    # weighted composite (1–10)
+    - status                        # new | contacted | responded | meeting_booked | converted | dead

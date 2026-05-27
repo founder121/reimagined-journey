@@ -19,9 +19,12 @@ const DATA_DIR = process.env.DATA_DIR
 
 /**
  * Write records to a timestamped JSON file.
- * @param {string} subdir  e.g. 'properties', 'leads', 'reports', 'campaigns'
- * @param {string} baseName  e.g. 'zillow-TX'   (date + .json appended)
- * @param {any}    data      JSON-serialisable value
+ * Supports nested subdirs: subdir='leads/raw' creates data/leads/raw/.
+ * The baseName should NOT contain a date — one is appended automatically.
+ *
+ * @param {string} subdir   e.g. 'raw', 'leads/raw', 'reports', 'outputs'
+ * @param {string} baseName e.g. 'listings-rightmove'  (date + .json appended)
+ * @param {any}    data     JSON-serialisable value
  * @returns {string} absolute path of written file
  */
 function writeData(subdir, baseName, data) {
@@ -29,7 +32,10 @@ function writeData(subdir, baseName, data) {
   fs.mkdirSync(dir, { recursive: true });
 
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const filename = `${baseName}-${date}.json`;
+  // Avoid double-dating if baseName already ends with YYYY-MM-DD
+  const filename = /\d{4}-\d{2}-\d{2}$/.test(baseName)
+    ? `${baseName}.json`
+    : `${baseName}-${date}.json`;
   const dest = path.join(dir, filename);
   const tmp = `${dest}.tmp`;
 
@@ -69,10 +75,18 @@ function listFiles(subdir) {
 
 /**
  * Return a summary of record counts for all data subdirectories.
+ * Covers the Square Centimeter pipeline directories.
  * @returns {Record<string, { files: number, latestFile: string|null }>}
  */
 function statusSummary() {
-  const dirs = ['properties', 'leads', 'reports', 'campaigns'];
+  const dirs = [
+    'raw',
+    'leads/raw',
+    'leads/qualified',
+    'leads/contacted',
+    'reports',
+    'outputs',
+  ];
   const summary = {};
   for (const d of dirs) {
     const files = listFiles(d);

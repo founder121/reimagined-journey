@@ -1,30 +1,24 @@
 'use strict';
-/**
- * Unit tests for agent3-analyst.js
- * Uses the sample properties fixture — no real HTTP calls needed.
- */
 const path = require('path');
-const analyst = require('../agents/agent3-analyst');
 
-// Prevent actual file writes during tests
-// Note: jest.mock factory cannot reference outer-scope variables; use require() inline.
+// jest.mock factory cannot reference out-of-scope variables — use require() inline.
 jest.mock('../utils/fileStore', () => ({
-  writeData: jest.fn(() => '/tmp/mock-report.json'),
-  listFiles: jest.fn(() => [
+  writeData:     jest.fn(() => '/tmp/mock-report.json'),
+  listFiles:     jest.fn(() => [
     require('path').resolve(
       __dirname,
       '../data/properties/sample-zillow-TX-2024-01-15.json',
     ),
   ]),
+  DATA_DIR: '/tmp/mock-data',
 }));
+
+const analyst = require('../agents/agent3-analyst');
 
 describe('agent3-analyst', () => {
   test('runs buy-hold analysis without error', async () => {
     const report = await analyst.run({
-      input: path.resolve(
-        __dirname,
-        '../data/properties/sample-zillow-TX-2024-01-15.json',
-      ),
+      input:    path.resolve(__dirname, '../data/properties/sample-zillow-TX-2024-01-15.json'),
       strategy: 'buy-hold',
     });
 
@@ -36,15 +30,11 @@ describe('agent3-analyst', () => {
 
   test('runs flip analysis without error', async () => {
     const report = await analyst.run({
-      input: path.resolve(
-        __dirname,
-        '../data/properties/sample-zillow-TX-2024-01-15.json',
-      ),
+      input:    path.resolve(__dirname, '../data/properties/sample-zillow-TX-2024-01-15.json'),
       strategy: 'flip',
     });
     expect(report.strategy).toBe('flip');
     expect(report.topDeals.length).toBeGreaterThan(0);
-    // Every deal should have an mao field
     for (const deal of report.topDeals) {
       expect('mao' in deal).toBe(true);
     }
@@ -52,10 +42,7 @@ describe('agent3-analyst', () => {
 
   test('deals are sorted by score descending', async () => {
     const report = await analyst.run({
-      input: path.resolve(
-        __dirname,
-        '../data/properties/sample-zillow-TX-2024-01-15.json',
-      ),
+      input:    path.resolve(__dirname, '../data/properties/sample-zillow-TX-2024-01-15.json'),
       strategy: 'wholesale',
     });
     const scores = report.allDeals.map((d) => d.score);
@@ -67,10 +54,7 @@ describe('agent3-analyst', () => {
   test('throws on unknown strategy', async () => {
     await expect(
       analyst.run({
-        input: path.resolve(
-          __dirname,
-          '../data/properties/sample-zillow-TX-2024-01-15.json',
-        ),
+        input:    path.resolve(__dirname, '../data/properties/sample-zillow-TX-2024-01-15.json'),
         strategy: 'not-a-strategy',
       }),
     ).rejects.toThrow('Unknown strategy');

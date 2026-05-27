@@ -7,9 +7,10 @@
     "realestate": "./index.js"
   },
   "scripts": {
-    "start": "node index.js",
-    "test": "jest --coverage",
-    "lint": "eslint agents/ utils/ index.js",
+    "start":  "node utils/webServer.js",
+    "cli":    "node index.js",
+    "test":   "jest --coverage",
+    "lint":   "eslint agents/ utils/ index.js",
     "status": "node index.js status"
   },
   "dependencies": {
@@ -17,6 +18,7 @@
     "axios": "^1.7.9",
     "cheerio": "^1.0.0",
     "commander": "^12.1.0",
+    "express": "^5.2.1",
     "js-yaml": "^4.1.0",
     "winston": "^3.17.0"
   },

@@ -31,10 +31,9 @@
 | Purchase Price | £3,250,000 |
 | Standard SDLT | £303,750 |
 | Additional property surcharge (3%) | £97,500 |
-| Non-UK resident surcharge (2%) | £65,000 |
-| **Total SDLT** | **£466,250** |
+| **Total SDLT** | **£401,250** |
 | Legal & Survey (est. 1.5 %) | £48,750 |
-| **Total Acquisition Cost** | **£3,765,000** |
+| **Total Acquisition Cost** | **£3,700,000** |
 
 ### Rental Income *(benchmark estimate — see notes)*
 
@@ -54,7 +53,7 @@
 |---|---|
 | Gross Yield | 1.77% |
 | Net Yield | 0.24% |
-| Cash-on-Cash ROI (65 % LTV, 4.5 %) | -5.29% |
+| Cash-on-Cash ROI (65 % LTV, 4.5 %) | -5.5% |
 
 ### 5-Year Capital Appreciation Projection *(3.0% pa consensus rate)*
 
@@ -96,7 +95,7 @@ None
 
 - Rental income figures are **benchmark estimates** based on PCL market data.
   Commission a RICS-qualified letting agent for a verified rental appraisal before acquisition.
-- SDLT calculated using April 2025 England residential rates including 3% additional property surcharge and 2% non-UK resident surcharge.
+- SDLT calculated using April 2025 England residential rates including 3% additional property surcharge.
 - Cash-on-Cash ROI assumes 65 % LTV interest-only mortgage at 4.5 % pa.
 - 5-year appreciation uses 3.0% pa — PCL prime market consensus.
   Actual returns will vary. This is not a guarantee of future performance.

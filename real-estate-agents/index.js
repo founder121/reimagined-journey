@@ -244,7 +244,7 @@ program
       const label = (deal.address ?? deal.marketZone ?? 'property').slice(0, 50);
       process.stdout.write(`  Generating: ${label}… `);
       try {
-        await marketing.run({ memo: deal, writeToDisk: true });
+        await marketing.run({ memo: deal, allMemos: topDeals, writeToDisk: true });
         process.stdout.write('✓\n');
         generated++;
       } catch (err) {

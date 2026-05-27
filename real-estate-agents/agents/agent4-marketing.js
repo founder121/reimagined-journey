@@ -120,6 +120,7 @@ async function run({
   property,
   memo,
   input,
+  allMemos,       // optional: all memos in the batch (used by newsletter for 3-deal context)
   types       = [...OUTPUT_TYPES],
   writeToDisk = true,
 } = {}) {
@@ -151,14 +152,14 @@ async function run({
     try {
       const content = useApi
         ? await generateWithLLM(client, type, deal, publicCtx)
-        : generateFromTemplate(type, deal, publicCtx);
+        : generateFromTemplate(type, deal, publicCtx, allMemos);
 
       outputs[type] = { content, file: null };
       log.info(`[agent4] ${type}: ${content.length} chars (${useApi ? 'LLM' : 'template'})`);
     } catch (err) {
       log.warn(`[agent4] ${type} failed (${err.message}); using template fallback`);
       try {
-        outputs[type] = { content: generateFromTemplate(type, deal, publicCtx), file: null };
+        outputs[type] = { content: generateFromTemplate(type, deal, publicCtx, allMemos), file: null };
       } catch (innerErr) {
         outputs[type] = { content: `(generation failed: ${innerErr.message})`, file: null };
       }
@@ -195,11 +196,11 @@ async function run({
  * @param {object} deal    Full deal object (may include confidential fields)
  * @param {object} ctx     Sanitised public context
  */
-function generateFromTemplate(type, deal, ctx) {
+function generateFromTemplate(type, deal, ctx, allMemos) {
   switch (type) {
     case 'deal-brief':  return generateDealBrief(deal);
     case 'linkedin':    return generateLinkedInPost(ctx);
-    case 'newsletter':  return generateNewsletter(ctx);
+    case 'newsletter':  return generateNewsletter(ctx, allMemos);
     case 'blog':        return generateBlogPost(ctx.zone);
     default:            throw new Error(`Unknown output type: ${type}`);
   }
@@ -220,9 +221,25 @@ function generateDealBrief(deal) {
   const pct   = (n) => n != null ? `${n}%` : 'N/A';
   const price = normalisePrice(deal.price);
 
-  const recLine = deal.recommendation
-    ? `**${recommendationIcon(deal.recommendation)} ${deal.recommendation}** — Score ${deal.score ?? 'N/A'} / 100`
-    : '*(not yet scored — run `sc analyze` to generate full analysis)*';
+  const rec      = deal.recommendation ?? null;
+  const recIcon  = recommendationIcon(rec);
+  const score    = deal.score ?? null;
+  const zone     = deal.marketZone ?? 'PCL';
+  const zoneFull = ZONE_LABELS[zone] ?? ZONE_LABELS.UNKNOWN;
+
+  // Capital preservation framing — advisory note without methodology detail
+  const locationLabel = deal.address
+    ? deal.address.split(',').slice(-3, -1).join(',').trim() || zoneFull
+    : zoneFull;
+  const pricePerSqft  = deal.pricePerSqft ?? null;
+  const pclBenchmark  = 2200;  // representative PCL £/sqft benchmark
+  const vsMarket = pricePerSqft
+    ? pricePerSqft > pclBenchmark * 1.1
+      ? `at a premium to the current PCL benchmark of c.£${pclBenchmark.toLocaleString('en-GB')}/sqft`
+      : pricePerSqft < pclBenchmark * 0.9
+      ? `at a discount to the current PCL benchmark of c.£${pclBenchmark.toLocaleString('en-GB')}/sqft`
+      : `broadly in line with the current PCL benchmark of c.£${pclBenchmark.toLocaleString('en-GB')}/sqft`
+    : 'within the prime London residential range';
 
   const tenureDetail = deal.tenure
     ? `${cap(deal.tenure)}${deal.leaseYearsRemaining ? ` (${deal.leaseYearsRemaining} yrs remaining)` : ''}`
@@ -236,20 +253,34 @@ function generateDealBrief(deal) {
     ? deal.warnings.map((w) => `- ${w}`).join('\n')
     : '- None identified at this time.';
 
-  const scoringTable = deal.scores
-    ? [
-        `| Capital Value & Comparables | ${deal.scores.capitalValue ?? '–'} | 25 |`,
-        `| Rental Yield | ${deal.scores.rentalYield ?? '–'} | 25 |`,
-        `| Neighbourhood Quality | ${deal.scores.neighbourhoodQuality ?? '–'} | 20 |`,
-        `| Investment Upside | ${deal.scores.investmentUpside ?? '–'} | 15 |`,
-        `| Market Conditions | ${deal.scores.marketConditions ?? '–'} | 15 |`,
-        `| **Total** | **${deal.score ?? '–'}** | **100** |`,
-      ].join('\n')
-    : '*(scores not available — run `sc analyze`)*';
-
   const projTable = deal.fiveYearProjection?.length
     ? deal.fiveYearProjection.map((yr) => `| ${yr.year} | ${fmt(yr.projectedValue)} |`).join('\n')
     : '| — | N/A |';
+
+  // SDLT breakdown — show standard + surcharge components if available from agent3 analysis
+  const sdltRows = [];
+  if (deal.sdltBase != null) {
+    sdltRows.push(`| Standard SDLT | ${fmt(deal.sdltBase)} |`);
+    if (deal.sdltAdditionalAmount > 0) {
+      sdltRows.push(`| Additional property surcharge (3%) | ${fmt(deal.sdltAdditionalAmount)} |`);
+    }
+    if (deal.sdltNonUkAmount > 0) {
+      sdltRows.push(`| Non-UK resident surcharge (2%) | ${fmt(deal.sdltNonUkAmount)} |`);
+    }
+    sdltRows.push(`| **Total SDLT** | **${fmt(deal.sdlt)}** |`);
+  } else {
+    sdltRows.push(`| SDLT (total, est.) | ${fmt(deal.sdlt)} |`);
+  }
+
+  // Dynamic SDLT disclaimer — only mentions surcharges that were actually applied
+  const sdltSurchargeNote = (() => {
+    const parts = [];
+    if (deal.sdltAdditionalProperty || deal.sdltAdditionalAmount > 0) parts.push('3% additional property surcharge');
+    if (deal.sdltNonUkResident      || deal.sdltNonUkAmount      > 0) parts.push('2% non-UK resident surcharge');
+    return parts.length
+      ? `SDLT calculated at April 2025 England residential rates including ${parts.join(' and ')}.`
+      : 'SDLT calculated at April 2025 England residential standard rates.';
+  })();
 
   return `# Investment Opportunity Brief
 **Square Centimeter Ltd** — STRICTLY PRIVATE & CONFIDENTIAL
@@ -259,7 +290,19 @@ function generateDealBrief(deal) {
 
 ## Advisory Recommendation
 
-${recLine}
+**${recIcon} ${rec ?? 'Under Review'}**${score != null ? ` — Rating: ${score}/100` : ''}
+
+**Advisory Note:** This is a sterling-denominated capital preservation asset in ${zoneFull}. \
+${locationLabel} carries a structural premium in the global residential investment market, \
+underpinned by constrained new supply, a globally diversified buyer base, and the enduring \
+appeal of London's legal certainty and institutional infrastructure for international family offices \
+and high-net-worth investors.
+
+At ${fmt(price)}${pricePerSqft ? ` (£${pricePerSqft.toLocaleString('en-GB')}/sqft)` : ''}, the asset is positioned ${vsMarket}. \
+The sub-2% net yield profile typical of ${zoneFull} reflects the capital preservation character \
+of the acquisition — investors in this segment are principally driven by currency diversification, \
+long-term capital appreciation, and estate planning rather than near-term income return. \
+The 5-year PCL consensus appreciation projection of 3.0% pa provides a credible long-hold case.
 
 ---
 
@@ -276,7 +319,6 @@ ${recLine}
 | Market Zone | ${deal.marketZone ?? 'N/A'} |
 | EPC Rating | ${deal.epcRating ?? 'N/A'} |
 | Days on Market | ${deal.daysOnMarket ?? 'N/A'} |
-| Portal | ${deal.portal ?? 'N/A'} |
 
 ---
 
@@ -287,11 +329,11 @@ ${recLine}
 | Item | Amount |
 |---|---|
 | Purchase Price | ${fmt(price)} |
-| SDLT | ${fmt(deal.sdlt)} |
+${sdltRows.join('\n')}
 | Legal & Survey (est. 1.5 %) | ${fmt(deal.legalFees)} |
 | **Total Acquisition Cost** | **${fmt(deal.totalAcquisitionCost)}** |
 
-### Rental Income *(benchmark estimate)*
+### Rental Income *(benchmark estimate — see notes)*
 
 | Item | Amount |
 |---|---|
@@ -300,6 +342,7 @@ ${recLine}
 | Service Charge (pa) | ${fmt(deal.serviceCharge)} |
 | Ground Rent (pa) | ${fmt(deal.groundRent)} |
 | Management Fee (est. 12 %) | ${fmt(deal.managementFee)} |
+| Void Provision (est. 1 % of price) | ${fmt(deal.voidProvision)} |
 | **Net Annual Income** | **${fmt(deal.netAnnualIncome)}** |
 
 ### Yields & Returns
@@ -308,22 +351,14 @@ ${recLine}
 |---|---|
 | Gross Yield | ${pct(deal.grossYieldPct)} |
 | Net Yield | ${pct(deal.netYieldPct)} |
-| Cash-on-Cash ROI | ${pct(deal.cashOnCashRoiPct)} |
+| Cash-on-Cash ROI (65 % LTV, 4.5 %) | ${pct(deal.cashOnCashRoiPct)} |
 
-### 5-Year Capital Appreciation Projection
+### 5-Year Capital Appreciation Projection *(3.0 % pa PCL consensus rate)*
 
 | Year | Projected Value |
 |---|---|
 ${projTable}
 | **Total Gain (est.)** | **${fmt(deal.fiveYearGain)} (+${pct(deal.fiveYearGainPct)})** |
-
----
-
-## Scoring Breakdown
-
-| Dimension | Score | Max |
-|---|---|---|
-${scoringTable}
 
 ---
 
@@ -337,12 +372,13 @@ ${warningList}
 
 ---
 
-## Disclaimer
+## Notes
 
-Rental income figures are **benchmark estimates** derived from published PCL/POL market data.
-They are not formal rental appraisals. SDLT calculated at April 2025 England rates.
-Cash-on-cash ROI assumes 65 % LTV interest-only at 4.5 % pa.
-This brief is for advisory purposes and does not constitute financial advice.
+- Rental income figures are **benchmark estimates** based on PCL market data. Commission a RICS-qualified letting agent for a verified rental appraisal before acquisition.
+- ${sdltSurchargeNote}
+- Cash-on-Cash ROI assumes 65 % LTV interest-only mortgage at 4.5 % pa.
+- 5-year appreciation uses 3.0 % pa PCL prime market consensus. Actual returns will vary. This is not a guarantee of future performance.
+- This brief is for advisory purposes only and does not constitute financial advice.
 
 ---
 
@@ -363,34 +399,26 @@ This brief is for advisory purposes and does not constitute financial advice.
  */
 function generateLinkedInPost(ctx) {
   const zoneFull = ZONE_LABELS[ctx.zone] ?? ZONE_LABELS.UNKNOWN;
-  const zoneShort = ctx.zone === 'PCL' ? 'PCL' : ctx.zone === 'POL' ? 'Prime Outer London' : 'prime London';
-  const rec = ctx.recommendation;
 
-  const marketSignal = rec === 'ACQUIRE'
-    ? `We are continuing to see selective acquisition opportunities at current price levels in ${zoneFull}.`
-    : rec === 'MONITOR'
-    ? `We are watching pricing dynamics closely in ${zoneFull} ahead of recommending selective acquisitions.`
-    : `${zoneFull} pricing requires careful navigation — quality-of-stock remains the critical variable.`;
+  const yieldLine = ctx.grossYieldPct
+    ? `Gross yields in ${zoneFull} are currently running at approximately ${ctx.grossYieldPct}%. Net yields — after service charges, management fees, and void provisions — are often below 1%.`
+    : `Gross yields in ${zoneFull} are running at approximately 1.5–2.0%. Net yields, after service charges, management fees, and void provisions, are often well below 1%.`;
 
-  const yieldContext = ctx.grossYieldPct
-    ? `Current gross yields in the ${zoneShort} market are running at approximately ${ctx.grossYieldPct}%, with net yields typically 1.5–2 percentage points below that once service charges, management, and voids are accounted for.`
-    : `Rental yields in ${zoneFull} continue to offer a meaningful sterling premium over equivalent Swiss, Singapore, or Zurich product on a risk-adjusted basis.`;
+  return `Sub-2% yields in Prime Central London: what exactly is the market pricing in?
 
-  return `Three observations from the ${zoneFull} market this week:
+It comes up in almost every conversation with family office allocators comparing London residential to Singapore, Zurich, or Dubai alternatives.
 
-${marketSignal}
+The honest answer: PCL buyers are not buying income. They are acquiring a sterling-denominated capital preservation asset — one with legal certainty, transparent land registration, global liquidity, and a 50-year track record of holding value through economic and geopolitical cycles.
 
-**On international demand:** Enquiry volumes from Gulf, Singapore, and Hong Kong family offices are running above the five-year average. Currency-adjusted, the sterling weakness of the past 18 months has compressed the effective entry price for USD, AED, and HKD-denominated buyers by 12–18% relative to 2022 peaks — a structural tailwind that is not going unnoticed.
+${yieldLine} The capital case has to stand on its own — and for the right investor profile, it does.
 
-**On yields:** ${yieldContext}
+Currency-adjusted, sterling weakness since 2022 has compressed the effective entry price for AED, USD, and HKD-denominated buyers by 12–18% relative to 2022 peaks. That is a structural tailwind that Gulf and Asian family offices are not overlooking.
 
-**On leasehold:** The Leasehold and Freehold Reform Act 2024 is beginning to create genuine value arbitrage opportunities. Properties with sub-90-year leases are pricing at meaningful discounts to long-leaseholds. Buyers comfortable with the extension process are finding this segment particularly interesting.
+If you are evaluating a first or incremental London residential allocation and would value a frank, confidential conversation about the numbers, I am happy to connect.
 
-For international investors considering London residential exposure — the advisory relationship matters as much as the property itself. Know your SDLT position, understand your leasehold exposure, and build your transaction team before you start the search.
+Julian Noble — Director, Square Centimeter Ltd
 
-If you would like a confidential conversation about the ${zoneFull} market, I am happy to connect.
-
-#PrimeLondonProperty #PropertyInvestment #LondonRealEstate #FamilyOffice #PCL #InternationalInvestors #SquareCentimeter`;
+#PrimeLondonProperty #LondonRealEstate #PCL`;
 }
 
 // ── Email Newsletter ──────────────────────────────────────────────────────────
@@ -399,78 +427,99 @@ If you would like a confidential conversation about the ${zoneFull} market, I am
  * Monthly investor email newsletter. Anonymised deal commentary only.
  * NO client names. NO specific addresses.
  *
- * @param {object} ctx  Output of sanitiseForPublic()
- * @returns {string}    Markdown newsletter content
+ * When allDeals is supplied (array of scored deal objects from agent3), up to 3
+ * anonymised deal snapshots are included; otherwise falls back to ctx only.
+ *
+ * @param {object}   ctx       Output of sanitiseForPublic()
+ * @param {object[]} [allDeals] All scored deals in this batch (optional)
+ * @returns {string}            Markdown newsletter content
  */
-function generateNewsletter(ctx) {
-  const zoneFull  = ZONE_LABELS[ctx.zone] ?? ZONE_LABELS.UNKNOWN;
+function generateNewsletter(ctx, allDeals) {
   const monthYear = new Date().toLocaleString('en-GB', { month: 'long', year: 'numeric' });
-  const yieldNote = ctx.grossYieldPct
-    ? `Gross yields in the current pipeline are averaging ${ctx.grossYieldPct}% — net yields of 1.5–2.5% after costs.`
-    : `Gross yields in the current pipeline remain in the 3.5–4.5% range across PCL.`;
 
-  const recNote = ctx.recommendation === 'ACQUIRE'
-    ? 'Our pipeline scoring indicates the market is offering selective ACQUIRE-grade opportunities to well-prepared buyers.'
-    : ctx.recommendation === 'MONITOR'
-    ? 'Current pricing warrants a MONITOR posture — our scoring models suggest patience over urgency.'
-    : 'Our models are returning PASS on the majority of new stock — vendor pricing expectations remain above fair value in several sub-markets.';
+  // ── Build up to 3 anonymised deal snapshots ──────────────────────────────
+  const deals   = Array.isArray(allDeals) && allDeals.length ? allDeals : null;
+  const snapshots = [];
 
-  return `# Prime London Investment Update — ${monthYear}
+  if (deals) {
+    deals.slice(0, 3).forEach((d, i) => {
+      const label    = String.fromCharCode(65 + i);  // A, B, C
+      const dZone    = ZONE_LABELS[d.marketZone] ?? ZONE_LABELS.UNKNOWN;
+      const dBeds    = d.beds    ? `${d.beds}-bed ` : '';
+      const dTenure  = d.tenure  ? cap(d.tenure)   : 'Leasehold';
+      const dRange   = priceRangeBand(normalisePrice(d.price));
+      const dYield   = d.grossYieldPct ? `c.${d.grossYieldPct}%` : 'sub-2%';
+      const dRec     = d.recommendation ?? 'MONITOR';
+      const dIcon    = recommendationIcon(dRec);
+      const dFlags   = (d.warnings ?? []).length
+        ? d.warnings.map((w) => `  - ${w}`).join('\n')
+        : '';
+      snapshots.push(
+        `**Opportunity ${label} — ${dZone} ${dBeds}${dTenure.toLowerCase()} | ${dRange}**\n` +
+        `Gross yield ${dYield}. ${dTenure} tenure.` +
+        (dFlags ? `\n${dFlags}` : '') +
+        `\n*Advisory: ${dIcon} ${dRec}*`,
+      );
+    });
+  } else {
+    // Single-deal fallback using ctx
+    const dBeds   = ctx.beds    ? `${ctx.beds}-bed ` : '';
+    const dTenure = ctx.tenure  ? cap(ctx.tenure)   : 'Leasehold';
+    const dZone   = ZONE_LABELS[ctx.zone] ?? ZONE_LABELS.UNKNOWN;
+    const dYield  = ctx.grossYieldPct ? `c.${ctx.grossYieldPct}%` : 'sub-2%';
+    const dRec    = ctx.recommendation ?? 'MONITOR';
+    snapshots.push(
+      `**Opportunity A — ${dZone} ${dBeds}${dTenure.toLowerCase()} | ${ctx.priceRange}**\n` +
+      `Gross yield ${dYield}. ${dTenure} tenure.\n*Advisory: ${recommendationIcon(dRec)} ${dRec}*`,
+    );
+  }
+
+  const snapshotBlock = snapshots.join('\n\n');
+
+  return `**Subject: Prime London Residential Update — ${monthYear}**
+
+---
+
+# Prime London Investment Update — ${monthYear}
 **Square Centimeter Ltd | Julian Noble, Director**
 
 ---
 
 ## Market Pulse
 
-Three observations from our advisory practice this month:
+**1. Overseas buyer demand is holding — but SDLT is structurally higher**
+Gulf and South-East Asian family office enquiries continue to run above the five-year average. Combined SDLT for an overseas buyer at the £2m–£10m level (standard rates + 3% additional property + 2% non-UK resident surcharge) now stands at 14–17% of purchase price. Acquisition structuring and timing remain a material advisory consideration.
 
-**1. ${zoneFull} acquisition pipeline — ${recNote}**
-International buyer enquiry volumes remain elevated, driven predominantly by UAE, Singapore, and Mainland China mandates. Asking price resilience in SW1, SW3, and W8 continues to surprise, despite the backdrop of UK interest rate volatility.
+**2. Sub-90-year leasehold: complexity creates opportunity**
+The Leasehold and Freehold Reform Act 2024 is moving pricing. Short-lease properties in SW1, SW3, and W8 are trading at 8–15% discounts to equivalent long-leaseholds — a meaningful entry discount for buyers who can manage the extension process.
 
-**2. Leasehold reform: opportunity in complexity**
-The Leasehold and Freehold Reform Act 2024 is creating a two-tier market. Sophisticated buyers who can manage lease extension transactions are finding sub-90-year leaseholds pricing at 8–15% discounts to equivalent long-leaseholds — a structural opportunity that will likely narrow as market participants adjust.
-
-**3. SDLT headwind: overseas buyer structuring matters**
-At current rates, an overseas investor purchasing a £1.5m investment property faces combined SDLT of approximately £166,000 (11%). Acquisition structuring — timing, vehicle, residency position — is worth careful advisory attention before exchange.
+**3. PCL pricing is resilient — selectivity is the watchword**
+New instruction volumes have increased year-on-year. Quality stock at fair value remains competitive, with correctly priced PCL product typically under offer within 30–60 days. Our advisory posture across the current pipeline remains MONITOR — patience over urgency.
 
 ---
 
-## Deal Commentary *(anonymised)*
+## Deal Snapshots *(anonymised — all client and property details withheld)*
 
-A recent ${zoneFull} acquisition we advised on:
+${snapshotBlock}
 
-${ctx.beds ? `- **Property type:** ${ctx.beds}-bedroom apartment` : '- **Property type:** Prime London apartment'}
-- **Market zone:** ${zoneFull}
-- **Price range:** ${ctx.priceRange}
-- **Tenure:** ${ctx.tenure ? cap(ctx.tenure) : 'Leasehold'}
-${ctx.grossYieldPct ? `- **Gross yield:** ${ctx.grossYieldPct}%` : ''}
-- **Recommendation:** ${ctx.recommendation ?? 'Under review'}
-
-*(All client and property details withheld in accordance with SC confidentiality policy.)*
+*(Details withheld per Square Centimeter confidentiality policy.)*
 
 ---
 
-## Yields in Focus
+## A Note on Yields
 
-${yieldNote}
-
-For context: equivalent Geneva apartments are yielding 1.8–2.2% gross; Singapore prime residential, 2.5–3.0%. The sterling-denominated premium — combined with London's transparent legal framework and the PCL market's global store-of-value status — continues to justify the allocation for international family offices.
+Gross yields across the current PCL pipeline average 1.5–2.0%. Net yields — after service charges, management, and void provisions — are often sub-1%. This is not an income market. It is a capital preservation market. For international investors, the sterling-denominated asset with London's legal certainty continues to justify the allocation on a long-hold basis.
 
 ---
 
-## Advisory Perspective
+If you have an active mandate or would value a confidential London market call, I am available.
 
-${recNote}
-
-If you have a specific mandate, are considering a first or incremental London residential allocation, or would value a confidential market update call, I am available.
-
-**Reply to this email or connect via LinkedIn.**
+**Julian Noble — Director, Square Centimeter Ltd**
+Reply to this email or connect on LinkedIn.
 
 ---
-
-*Square Centimeter Ltd | Julian Noble, Director | London*
-*You are receiving this as a member of our investor update list.*
-*[Unsubscribe] | Data processed in accordance with GDPR and the UK Data Protection Act 2018.*
+*Square Centimeter Ltd | London | [Unsubscribe]*
+*Processed in accordance with UK GDPR and the Data Protection Act 2018.*
 `;
 }
 
@@ -717,9 +766,13 @@ const OUTPUT_FILENAMES = {
  * @returns {string}  Absolute path of the output directory
  */
 function writeOutputFiles(deal, outputs) {
-  const zone = (deal.marketZone ?? 'london').toLowerCase();
+  // Use address slug (first 40 chars) so each property gets its own directory.
+  // Falls back to market zone if no address is available.
+  const slugBase = deal.address
+    ? deal.address.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
+    : (deal.marketZone ?? 'london').toLowerCase();
   const date = today();
-  const dir = path.join(OUTPUTS_DIR, `marketing-${zone}-${date}`);
+  const dir = path.join(OUTPUTS_DIR, `marketing-${slugBase}-${date}`);
 
   fs.mkdirSync(dir, { recursive: true });
 

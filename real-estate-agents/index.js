@@ -846,13 +846,15 @@ function printAnalysisReport(report) {
 function buildPipelineReport() {
   const rawFiles    = safeListFiles('raw');
   const leadFiles   = safeListFiles('leads/raw');
-  const qualFiles   = safeListFiles('leads/qualified');
   const reportFiles = safeListFilesMd(REPORTS_DIR);
   const outputDirs  = safeListOutputDirs();
 
+  // Qualified leads are stored as .csv — use the CSV-aware counter
+  const qualCsv   = safeListFilesCsv('leads/qualified');
+
   const totalListings = rawFiles.reduce((n, f)  => n + (countRecords(f) ?? 0), 0);
   const totalLeads    = leadFiles.reduce((n, f) => n + (countRecords(f) ?? 0), 0);
-  const totalQual     = qualFiles.reduce((n, f) => n + (countRecords(f) ?? 0), 0);
+  const totalQual     = qualCsv.records ?? 0;
 
   // Count memos and ACQUIRE recommendations from markdown files
   const memoFiles    = reportFiles.filter((f) => path.basename(f).startsWith('memo-'));
@@ -882,9 +884,9 @@ function buildPipelineReport() {
       latestFile:   leadFiles[0] ? path.basename(leadFiles[0]) : null,
     },
     qualifiedLeads: {
-      files:        qualFiles.length,
+      files:        qualCsv.files,
       totalRecords: totalQual,
-      latestFile:   qualFiles[0] ? path.basename(qualFiles[0]) : null,
+      latestFile:   qualCsv.latest !== '(none)' ? qualCsv.latest : null,
     },
     leadStatus:     statusCounts,
     analysis: {

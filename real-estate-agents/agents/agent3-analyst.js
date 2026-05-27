@@ -187,7 +187,6 @@ function analyzeProperty(prop, opts = {}) {
     mortgageLtv        = DEFAULT_MORTGAGE_LTV,
     mortgageRate       = DEFAULT_MORTGAGE_RATE,
   } = opts;
-
   // ── Normalise inputs ────────────────────────────────────────────────────────
   const price        = normalisePrice(prop.price);
   const beds         = Math.max(0, parseInt(prop.beds, 10) || 0);
@@ -262,10 +261,13 @@ function analyzeProperty(prop, opts = {}) {
     },
 
     // Composite
-    score:          totalScore,
+    score:             totalScore,
     recommendation,
-    agentVersion:   AGENT_VERSION,
-    analysedAt:     new Date().toISOString(),
+    agentVersion:      AGENT_VERSION,
+    analysedAt:        new Date().toISOString(),
+    // Surcharge flags — stored so memo can document the SDLT basis
+    sdltAdditionalProperty: additionalProperty,
+    sdltNonUkResident:      nonUkResident,
   };
 }
 
@@ -277,10 +279,13 @@ function computeFinancials({
   price, beds, zone, svcCharge, groundRent,
   additionalProperty, nonUkResident, mortgageLtv, mortgageRate,
 }) {
-  // Purchase costs
-  const sdlt       = computeSdlt(price, additionalProperty, nonUkResident);
-  const legalFees  = Math.round(price * LEGAL_FEE_RATE);
-  const totalAcquisitionCost = price + sdlt + legalFees;
+  // Purchase costs — SDLT with optional surcharges (cumulative, applied to every band)
+  const sdltBase               = computeSdlt(price, false,             false);
+  const sdltAdditionalAmount   = additionalProperty ? Math.round(price * 0.03) : 0;
+  const sdltNonUkAmount        = nonUkResident      ? Math.round(price * 0.02) : 0;
+  const sdlt                   = sdltBase + sdltAdditionalAmount + sdltNonUkAmount;
+  const legalFees              = Math.round(price * LEGAL_FEE_RATE);
+  const totalAcquisitionCost   = price + sdlt + legalFees;
 
   // Rental income (benchmark estimate — clearly labelled in memo)
   const bedKey      = Math.min(beds, 4);
@@ -319,8 +324,11 @@ function computeFinancials({
   }));
 
   return {
-    // Purchase costs
+    // Purchase costs (SDLT components stored separately for memo transparency)
     sdlt,
+    sdltBase,
+    sdltAdditionalAmount,
+    sdltNonUkAmount,
     legalFees,
     totalAcquisitionCost,
 
@@ -362,7 +370,8 @@ function computeFinancials({
 function flattenFinancials(fin) {
   if (!fin) {
     return {
-      sdlt: null, legalFees: null, totalAcquisitionCost: null,
+      sdlt: null, sdltBase: null, sdltAdditionalAmount: null, sdltNonUkAmount: null,
+      legalFees: null, totalAcquisitionCost: null,
       estimatedMonthlyRent: null, estimatedAnnualRent: null,
       managementFee: null, voidProvision: null, netAnnualIncome: null,
       grossYieldPct: null, netYieldPct: null,
@@ -374,6 +383,9 @@ function flattenFinancials(fin) {
   }
   return {
     sdlt:                   fin.sdlt,
+    sdltBase:               fin.sdltBase,
+    sdltAdditionalAmount:   fin.sdltAdditionalAmount,
+    sdltNonUkAmount:        fin.sdltNonUkAmount,
     legalFees:              fin.legalFees,
     totalAcquisitionCost:   fin.totalAcquisitionCost,
     estimatedMonthlyRent:   fin.estimatedMonthlyRent,
@@ -564,6 +576,14 @@ function buildMemoMarkdown(deal) {
   const date   = new Date().toISOString().slice(0, 10);
   const emoji  = { ACQUIRE: '🟢', MONITOR: '🟡', PASS: '🔴' }[deal.recommendation] ?? '';
 
+  // Build SDLT note for the Notes section
+  const sdltSurcharges = [];
+  if (deal.sdltAdditionalProperty) sdltSurcharges.push('3% additional property surcharge');
+  if (deal.sdltNonUkResident)      sdltSurcharges.push('2% non-UK resident surcharge');
+  const sdltNote = sdltSurcharges.length
+    ? `SDLT calculated using April 2025 England residential rates including ${sdltSurcharges.join(' and ')}.`
+    : 'SDLT calculated using April 2025 England residential standard rates.';
+
   const projTable = (deal.fiveYearProjection ?? [])
     .map((yr) => `| ${yr.year} | ${fmt(yr.projectedValue)} |`)
     .join('\n') || '| — | N/A |';
@@ -583,6 +603,18 @@ function buildMemoMarkdown(deal) {
   const apprPct = deal.appreciationRateAnnual != null
     ? `${(deal.appreciationRateAnnual * 100).toFixed(1)}%`
     : 'N/A';
+
+  // SDLT breakdown rows (shown when surcharges apply)
+  const sdltBreakdownRows = [
+    `| Standard SDLT | ${fmt(deal.sdltBase)} |`,
+    deal.sdltAdditionalAmount > 0
+      ? `| Additional property surcharge (3%) | ${fmt(deal.sdltAdditionalAmount)} |`
+      : null,
+    deal.sdltNonUkAmount > 0
+      ? `| Non-UK resident surcharge (2%) | ${fmt(deal.sdltNonUkAmount)} |`
+      : null,
+    `| **Total SDLT** | **${fmt(deal.sdlt)}** |`,
+  ].filter(Boolean).join('\n');
 
   return `# Investment Memo: ${deal.address ?? 'Unknown Address'}
 **Square Centimeter Ltd** — Prepared: ${date}
@@ -615,7 +647,7 @@ function buildMemoMarkdown(deal) {
 | Item | Amount |
 |---|---|
 | Purchase Price | ${fmt(deal.price)} |
-| SDLT | ${fmt(deal.sdlt)} |
+${sdltBreakdownRows}
 | Legal & Survey (est. 1.5 %) | ${fmt(deal.legalFees)} |
 | **Total Acquisition Cost** | **${fmt(deal.totalAcquisitionCost)}** |
 
@@ -675,7 +707,7 @@ ${warnList}
 
 - Rental income figures are **benchmark estimates** based on ${deal.marketZone ?? 'London'} market data.
   Commission a RICS-qualified letting agent for a verified rental appraisal before acquisition.
-- SDLT calculated using April 2025 England residential rates (additional property surcharge applied).
+- ${sdltNote}
 - Cash-on-Cash ROI assumes 65 % LTV interest-only mortgage at 4.5 % pa.
 - 5-year appreciation uses ${apprPct} pa — ${deal.marketZone ?? 'London'} prime market consensus.
   Actual returns will vary. This is not a guarantee of future performance.

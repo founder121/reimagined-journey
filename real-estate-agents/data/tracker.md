@@ -13,3 +13,7 @@ Format: `- ISO_TIMESTAMP | Agent N | description`
 - 2026-05-27T14:36:04.620Z | api.company-information.service.gov.uk | network_failure | network_blocked | https://api.company-information.service.gov.uk/search/companies?q=Mohammed%20Al-Rashid&items_per_pag | HTTP 403
 - 2026-05-27T14:36:06.598Z | enrich-leads | processed=8 ch_matched=0 needs_review=8 → qualified-2026-05-27.csv
 - 2026-05-27T14:36:06.598Z | sc enrich | processed=8 ch_matched=0 needs_review=8
+- 2026-05-27T14:47:49.950Z | Agent 3 | Analysis — 3 properties scored
+- 2026-05-27T14:49:51.279Z | Agent 3 | Analysis — 3 properties scored
+- 2026-05-27T14:50:00.625Z | Agent All | Pipeline report generated — 3 listings, 5 raw leads, 0 qualified, 0 ACQUIRE
+- 2026-05-27T14:50:32.712Z | Agent All | Pipeline report generated — 3 listings, 5 raw leads, 8 qualified, 0 ACQUIRE

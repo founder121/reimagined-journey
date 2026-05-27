@@ -448,12 +448,16 @@ program
   .command('status')
   .description('Show pipeline counts: raw leads, qualified, contacted, converted')
   .action(handle(async () => {
-    // Data subdirs — contain timestamped JSON files
-    const dataDirs = [
-      { key: 'raw',             label: 'Listings        (data/raw/)' },
-      { key: 'leads/raw',       label: 'Raw leads       (data/leads/raw/)' },
-      { key: 'leads/qualified', label: 'Qualified leads (data/leads/qualified/)' },
-      { key: 'leads/contacted', label: 'Contacted       (data/leads/contacted/)' },
+    // Data subdirs — contain timestamped JSON files (listings, raw leads)
+    const jsonDirs = [
+      { key: 'raw',       label: 'Listings        (data/raw/)' },
+      { key: 'leads/raw', label: 'Raw leads       (data/leads/raw/)' },
+    ];
+
+    // Qualified/contacted — stored as .csv files (not JSON)
+    const csvDirs = [
+      { subdir: 'leads/qualified', label: 'Qualified leads (data/leads/qualified/)' },
+      { subdir: 'leads/contacted', label: 'Contacted       (data/leads/contacted/)' },
     ];
 
     // Root-level directories — memos (.md) and marketing dirs
@@ -464,12 +468,20 @@ program
     console.log('  Directory                         Files  Records   Latest file');
     console.log('  ' + '─'.repeat(72));
 
-    for (const { key, label } of dataDirs) {
+    for (const { key, label } of jsonDirs) {
       const files   = safeListFiles(key);
       const latest  = files[0] ? path.basename(files[0]) : '(none)';
       const records = countRecords(files[0]);
       console.log(
         `  ${label.padEnd(36)} ${String(files.length).padStart(5)}  ` +
+        `${String(records ?? '–').padStart(7)}   ${latest}`,
+      );
+    }
+
+    for (const { subdir, label } of csvDirs) {
+      const { files, records, latest } = safeListFilesCsv(subdir);
+      console.log(
+        `  ${label.padEnd(36)} ${String(files).padStart(5)}  ` +
         `${String(records ?? '–').padStart(7)}   ${latest}`,
       );
     }
@@ -492,7 +504,7 @@ program
 
     // ── Lead status breakdown ────────────────────────────────────────────────
     const statusCounts = countLeadStatuses();
-    const statOrder    = ['new', 'contacted', 'responded', 'meeting_booked', 'converted', 'dead'];
+    const statOrder    = ['new', 'contacted', 'responded', 'meeting_booked', 'converted', 'needs_manual_enrichment', 'dead'];
     const anyStatus    = statOrder.some((s) => (statusCounts[s] ?? 0) > 0);
 
     if (anyStatus) {
@@ -501,8 +513,8 @@ program
         const n = statusCounts[status] ?? 0;
         if (n > 0) {
           const bar   = '█'.repeat(Math.min(n, 30));
-          const emoji = { new: '🆕', contacted: '📬', responded: '💬', meeting_booked: '📅', converted: '✅', dead: '❌' }[status] ?? '•';
-          console.log(`  ${emoji}  ${status.padEnd(16)} ${String(n).padStart(4)}  ${bar}`);
+          const emoji = { new: '🆕', contacted: '📬', responded: '💬', meeting_booked: '📅', converted: '✅', needs_manual_enrichment: '🔍', dead: '❌' }[status] ?? '•';
+          console.log(`  ${emoji}  ${status.padEnd(24)} ${String(n).padStart(4)}  ${bar}`);
         }
       }
     }
@@ -522,7 +534,8 @@ program
     const pipelinePath = path.join(DATA_DIR, 'pipeline.md');
     if (fs.existsSync(pipelinePath)) {
       const content   = fs.readFileSync(pipelinePath, 'utf8');
-      const unchecked = (content.match(/- \[ \]/g) ?? []).length;
+      // Only count task-list items at the start of a line (not inline code like `- [ ]`)
+      const unchecked = (content.match(/^- \[ \]/gm) ?? []).length;
       if (unchecked > 0) {
         console.log(`\n  ⚠️   ${unchecked} item(s) awaiting Julian Noble's review — run "sc pipeline" to view`);
       }
@@ -552,8 +565,9 @@ program
       }
 
       const content   = fs.readFileSync(pipelinePath, 'utf8');
-      const unchecked = (content.match(/- \[ \]/g) ?? []).length;
-      const checked   = (content.match(/- \[x\]/gi) ?? []).length;
+      // Match only start-of-line task items to avoid false positives from inline code
+      const unchecked = (content.match(/^- \[ \]/gm) ?? []).length;
+      const checked   = (content.match(/^- \[x\]/gim) ?? []).length;
 
       console.log(content);
       console.log(`\n  ${unchecked} pending  |  ${checked} resolved\n`);
@@ -617,6 +631,42 @@ program
     console.log('   Next: run "sc report" to generate the full pipeline report.\n');
   }));
 
+// ── sc enrich ─────────────────────────────────────────────────────────────────
+program
+  .command('enrich')
+  .description('Enrich raw leads via Companies House API → data/leads/qualified/')
+  .option('--min-score <n>',  'Minimum lead_score to process (default: 7)', parseFloat)
+  .option('-l, --limit <n>',  'Cap on leads to enrich', parseIntArg)
+  .option('--api-key <key>',  'Companies House API key (overrides COMPANIES_HOUSE_API_KEY env)')
+  .option('--no-pipeline',    'Skip data/pipeline.md — only process data/leads/raw/')
+  .option('-n, --dry-run',    'Parse leads only — no Companies House API calls')
+  .action(handle(async (opts) => {
+    const enrich = require('./utils/enrichLeads');
+
+    const result = await enrich.run({
+      minScore:        opts.minScore ?? 7,
+      limit:           opts.limit,
+      apiKey:          opts.apiKey,
+      includePipeline: opts.pipeline !== false,
+      dryRun:          opts.dryRun,
+    });
+
+    if (opts.dryRun) {
+      console.log(`\n  [DRY RUN] Would enrich ${result.total} lead(s) — no Companies House calls made.\n`);
+      return;
+    }
+
+    logTrackerEntry(`sc enrich | processed=${result.total} ch_matched=${result.enriched} needs_review=${result.needsReview}`);
+
+    console.log(`\n✅  Enrichment complete`);
+    console.log(`   ${result.total} lead(s) processed`);
+    console.log(`   ${result.enriched} matched Companies House`);
+    if (result.needsReview > 0) {
+      console.log(`   ⚠️  ${result.needsReview} need manual review (status: needs_manual_enrichment)`);
+    }
+    console.log(`   → data/leads/qualified/qualified-${todayStr()}.csv\n`);
+  }));
+
 // ── Parse ─────────────────────────────────────────────────────────────────────
 program.parse(process.argv);
 
@@ -649,16 +699,26 @@ function countRecords(filePath) {
 /**
  * Count qualified lead statuses from all CSV files in data/leads/qualified/.
  * Returns an object keyed by status value.
+ * Note: qualified leads are stored as .csv (not .json), so listFiles() is bypassed.
  */
 function countLeadStatuses() {
-  const counts  = {};
-  const files   = safeListFiles('leads/qualified');
+  const counts = {};
+  const dir    = path.join(DATA_DIR, 'leads', 'qualified');
+
+  if (!fs.existsSync(dir)) return counts;
+
+  let files;
+  try {
+    files = fs.readdirSync(dir)
+      .filter((f) => f.endsWith('.csv'))
+      .map((f) => path.join(dir, f));
+  } catch (_) { return counts; }
+
   for (const f of files) {
-    if (!f.endsWith('.csv')) continue;
     try {
       const lines = fs.readFileSync(f, 'utf8').trim().split('\n');
       if (lines.length < 2) continue;
-      const headers = parseCsvLine(lines[0]);
+      const headers   = parseCsvLine(lines[0]);
       const statusIdx = headers.indexOf('status');
       if (statusIdx === -1) continue;
       for (let i = 1; i < lines.length; i++) {
@@ -901,6 +961,43 @@ function formatReportMarkdown(r) {
 }
 
 // ── Filesystem helpers ────────────────────────────────────────────────────────
+
+/**
+ * List CSV files in a data subdirectory and count their rows.
+ * Used for data/leads/qualified/ and data/leads/contacted/ which store .csv
+ * (not .json), so listFiles() doesn't find them.
+ * @param {string} subdir  Relative to DATA_DIR
+ * @returns {{ files: number, records: number|null, latest: string }}
+ */
+function safeListFilesCsv(subdir) {
+  try {
+    const dir = path.join(DATA_DIR, subdir);
+    if (!fs.existsSync(dir)) return { files: 0, records: null, latest: '(none)' };
+
+    const sorted = fs.readdirSync(dir)
+      .filter((f) => f.endsWith('.csv'))
+      .sort((a, b) => {
+        try {
+          return fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs;
+        } catch (_) { return 0; }
+      });
+
+    if (!sorted.length) return { files: 0, records: null, latest: '(none)' };
+
+    // Count data rows (non-header lines) across all CSV files
+    let totalRows = 0;
+    for (const f of sorted) {
+      try {
+        const lines = fs.readFileSync(path.join(dir, f), 'utf8').trim().split('\n');
+        totalRows += Math.max(0, lines.length - 1);   // subtract header row
+      } catch (_) { /* skip corrupt */ }
+    }
+
+    return { files: sorted.length, records: totalRows, latest: sorted[0] };
+  } catch (_) {
+    return { files: 0, records: null, latest: '(none)' };
+  }
+}
 
 /** List .md files in an absolute directory path, newest first. */
 function safeListFilesMd(absDir) {

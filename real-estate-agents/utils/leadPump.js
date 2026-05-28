@@ -29,12 +29,12 @@ const TRACKER_PATH  = path.join(DATA_DIR, 'tracker.md');
 /* ── Pipeline definition ───────────────────────────────────────────────── */
 
 const STEPS = [
-  { name: 'scan',              args: ['index.js', 'scan'] },
-  { name: 'leads hmlr_uk_wide', args: ['index.js', 'leads', '--source', 'hmlr_uk_wide'] },
-  { name: 'enrich',            args: ['index.js', 'enrich'] },
-  { name: 'cm2Bridge push',    args: ['utils/cm2Bridge.js', 'push'] },
-  { name: 'cm2Bridge sync',    args: ['utils/cm2Bridge.js', 'sync'] },
-  { name: 'cm2Bridge whatsapp', args: ['utils/cm2Bridge.js', 'whatsapp'] },
+  { name: 'scan',               args: ['index.js', 'scan'],                                  timeout: 90_000  },
+  { name: 'leads hmlr_uk_wide', args: ['index.js', 'leads', '--source', 'hmlr_uk_wide'],     timeout: 180_000 },
+  { name: 'enrich',             args: ['index.js', 'enrich'],                                timeout: 60_000  },
+  { name: 'cm2Bridge push',     args: ['utils/cm2Bridge.js', 'push'],                        timeout: 300_000 },
+  { name: 'cm2Bridge sync',     args: ['utils/cm2Bridge.js', 'sync'],                        timeout: 120_000 },
+  { name: 'cm2Bridge whatsapp', args: ['utils/cm2Bridge.js', 'whatsapp'],                    timeout: 120_000 },
 ];
 
 /* ── Tracker helper ────────────────────────────────────────────────────── */
@@ -126,7 +126,7 @@ async function run() {
     console.log(`\n[LeadPump] [ ${stepNum}/${STEPS.length} ] ${step.name}`);
 
     try {
-      execFileSync('node', step.args, { cwd: ROOT, stdio: 'inherit' });
+      execFileSync('node', step.args, { cwd: ROOT, stdio: 'inherit', timeout: step.timeout || 120_000 });
     } catch (err) {
       console.error(`[LeadPump] ${label} ERROR: ${err.message}`);
       appendTracker(

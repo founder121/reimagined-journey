@@ -197,7 +197,7 @@ OAUTH_SERVER_URL=https://api.manus.im
 VITE_OAUTH_PORTAL_URL=https://manus.im/oauth
 OWNER_NAME=Julian Noble
 OWNER_OPEN_ID=oKaCpXvcwRHTtSLr2qbPVL
-VITE_APP_ID=PATCH_VITE_APP_ID
+VITE_APP_ID=68kcwaam
 
 # ── Database (local MySQL — created by setup in Step 4) ─────────
 DATABASE_URL=mysql://cm2:cm2secure2026@127.0.0.1:3306/cm2db

@@ -8,7 +8,7 @@ set -euo pipefail
 # ── Config ──────────────────────────────────────────────────────
 REAL_ESTATE_REPO="https://github.com/founder121/reimagined-journey"
 REAL_ESTATE_SUBDIR="real-estate-agents"   # monorepo subfolder
-CM2_WEBSITE_REPO=""                         # FILL IN: your cm2-website repo URL
+CM2_WEBSITE_REPO="https://github.com/juliannoble1-debug/cm2-website.git"
 APP_DIR="/home/cm2/app"
 SERVER_IP="204.168.190.158"
 
@@ -148,33 +148,87 @@ ok "Dependencies installed"
 # ════════════════════════════════════════════════════════════════
 step "STEP 10 — Environment files"
 # ════════════════════════════════════════════════════════════════
-# real-estate-agents .env (non-secret values pre-filled; secrets need your values)
+# real-estate-agents .env
 cat > $APP_DIR/real-estate-agents/.env << 'ENVEOF'
 # ── CM2 Bridge ──────────────────────────────────────────────────
 CM2_BASE_URL=https://www.thecm2.com
-CM2_API_KEY=REPLACE_WITH_REAL_KEY
+CM2_API_KEY=REPLACE
 CM2_PUSH_SCORE_MIN=5.0
 CM2_RETRY_DELAY_MS=30000
 CM2_REQUEST_TIMEOUT=10000
 
 # ── API Keys ────────────────────────────────────────────────────
-ANTHROPIC_API_KEY=REPLACE_WITH_REAL_KEY
-COMPANIES_HOUSE_API_KEY=REPLACE_WITH_REAL_KEY
-SENDGRID_API_KEY=REPLACE_WITH_REAL_KEY
+ANTHROPIC_API_KEY=REPLACE
+COMPANIES_HOUSE_API_KEY=REPLACE
+SENDGRID_API_KEY=REPLACE
 
 # ── Server ──────────────────────────────────────────────────────
 PORT=3001
 NODE_ENV=production
 ENVEOF
 
-# cm2-website .env template (fill in from Manus)
+# cm2-website .env — all 34 keys from Manus deployment
 if [ -d "$APP_DIR/cm2-website" ]; then
   cat > $APP_DIR/cm2-website/.env << 'ENVEOF'
-# ── Fill all values from your Manus deployment ──────────────────
-DATABASE_URL=REPLACE_WITH_REAL_VALUE
-NEXTAUTH_SECRET=REPLACE_WITH_REAL_VALUE
-NEXTAUTH_URL=https://thecm2.com
-SENDGRID_API_KEY=REPLACE_WITH_REAL_KEY
+# ── AI / Voice ──────────────────────────────────────────────────
+ANTHROPIC_API_KEY=REPLACE
+ELEVENLABS_API_KEY=REPLACE
+ELEVENLABS_VOICE_ID=REPLACE
+
+# ── Forge (internal API) ────────────────────────────────────────
+BUILT_IN_FORGE_API_KEY=REPLACE
+BUILT_IN_FORGE_API_URL=REPLACE
+VITE_FRONTEND_FORGE_API_KEY=REPLACE
+VITE_FRONTEND_FORGE_API_URL=REPLACE
+
+# ── Auth / Security ─────────────────────────────────────────────
+JWT_SECRET=REPLACE
+CM2_ADMIN_PASSCODE=REPLACE
+OAUTH_SERVER_URL=REPLACE
+VITE_OAUTH_PORTAL_URL=REPLACE
+OWNER_NAME=REPLACE
+OWNER_OPEN_ID=REPLACE
+
+# ── Database ────────────────────────────────────────────────────
+DATABASE_URL=REPLACE
+
+# ── Email: SendGrid ─────────────────────────────────────────────
+SENDGRID_API_KEY=REPLACE
+
+# ── Email: SMTP ─────────────────────────────────────────────────
+SMTP_HOST=REPLACE
+SMTP_PORT=587
+SMTP_USER=REPLACE
+SMTP_PASS=REPLACE
+SMTP_FROM=REPLACE
+SMTP_TO=REPLACE
+
+# ── Email: Gmail (agent mailer) ─────────────────────────────────
+GMAIL_USER=REPLACE
+GMAIL_FROM=REPLACE
+GMAIL_APP_PASSWORD=REPLACE
+
+# ── LinkedIn ────────────────────────────────────────────────────
+LINKEDIN_CLIENT_ID=REPLACE
+LINKEDIN_CLIENT_SECRET=REPLACE
+LINKEDIN_ACCESS_TOKEN=REPLACE
+LINKEDIN_PERSON_URN=REPLACE
+
+# ── Analytics / Tracking ────────────────────────────────────────
+VITE_ANALYTICS_ENDPOINT=REPLACE
+VITE_ANALYTICS_WEBSITE_ID=REPLACE
+VITE_GA4_MEASUREMENT_ID=REPLACE
+VITE_META_PIXEL_ID=REPLACE
+
+# ── App Identity ────────────────────────────────────────────────
+VITE_APP_ID=REPLACE
+VITE_APP_TITLE=REPLACE
+VITE_APP_LOGO=REPLACE
+
+# ── Outreach Control ────────────────────────────────────────────
+OUTREACH_PAUSED=false
+
+# ── Server ──────────────────────────────────────────────────────
 NODE_ENV=production
 PORT=3000
 ENVEOF

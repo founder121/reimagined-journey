@@ -196,7 +196,7 @@ CM2_ADMIN_PASSCODE=cm2london
 OAUTH_SERVER_URL=https://api.manus.im
 VITE_OAUTH_PORTAL_URL=https://manus.im/oauth
 OWNER_NAME=Julian Noble
-OWNER_OPEN_ID=PATCH_OWNER_OPEN_ID
+OWNER_OPEN_ID=oKaCpXvcwRHTtSLr2qbPVL
 VITE_APP_ID=PATCH_VITE_APP_ID
 
 # ── Database (local MySQL — created by setup in Step 4) ─────────

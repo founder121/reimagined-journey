@@ -48,8 +48,17 @@ tsx --version  && ok "tsx  $(tsx --version)"
 step "STEP 4 — System packages (nginx, certbot, chromium, git)"
 # ════════════════════════════════════════════════════════════════
 apt-get install -y nginx certbot python3-certbot-nginx \
-  git curl wget unzip mysql-client \
+  git curl wget unzip \
+  postgresql postgresql-client \
   chromium-browser xvfb -qq
+
+# ── PostgreSQL: create app database ────────────────────────────
+systemctl enable postgresql
+systemctl start postgresql
+sudo -u postgres psql -c "CREATE USER cm2 WITH PASSWORD 'cm2secure2026';" 2>/dev/null || true
+sudo -u postgres psql -c "CREATE DATABASE cm2db OWNER cm2;"               2>/dev/null || true
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE cm2db TO cm2;" 2>/dev/null || true
+ok "PostgreSQL: cm2db ready (user=cm2 pass=cm2secure2026 port=5432)"
 
 CHROMIUM=$(which chromium-browser 2>/dev/null || which chromium 2>/dev/null || echo "NOT FOUND")
 ok "Chromium: $CHROMIUM"
@@ -148,82 +157,82 @@ ok "Dependencies installed"
 # ════════════════════════════════════════════════════════════════
 step "STEP 10 — Environment files"
 # ════════════════════════════════════════════════════════════════
-# real-estate-agents .env
+# real-estate-agents .env  (PATCH_ tokens replaced by patch-env.sh)
 cat > $APP_DIR/real-estate-agents/.env << 'ENVEOF'
 # ── CM2 Bridge ──────────────────────────────────────────────────
 CM2_BASE_URL=https://www.thecm2.com
-CM2_API_KEY=REPLACE
+CM2_API_KEY=
 CM2_PUSH_SCORE_MIN=5.0
 CM2_RETRY_DELAY_MS=30000
 CM2_REQUEST_TIMEOUT=10000
 
 # ── API Keys ────────────────────────────────────────────────────
-ANTHROPIC_API_KEY=REPLACE
-COMPANIES_HOUSE_API_KEY=REPLACE
-SENDGRID_API_KEY=REPLACE
+ANTHROPIC_API_KEY=PATCH_ANTHROPIC
+COMPANIES_HOUSE_API_KEY=
+SENDGRID_API_KEY=PATCH_SENDGRID
 
 # ── Server ──────────────────────────────────────────────────────
 PORT=3001
 NODE_ENV=production
 ENVEOF
 
-# cm2-website .env — all 34 keys from Manus deployment
+# cm2-website .env  (PATCH_ tokens replaced by patch-env.sh)
 if [ -d "$APP_DIR/cm2-website" ]; then
   cat > $APP_DIR/cm2-website/.env << 'ENVEOF'
 # ── AI / Voice ──────────────────────────────────────────────────
-ANTHROPIC_API_KEY=REPLACE
-ELEVENLABS_API_KEY=REPLACE
-ELEVENLABS_VOICE_ID=REPLACE
+ANTHROPIC_API_KEY=PATCH_ANTHROPIC
+ELEVENLABS_API_KEY=PATCH_ELEVENLABS
+ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
 
-# ── Forge (internal API) ────────────────────────────────────────
-BUILT_IN_FORGE_API_KEY=REPLACE
-BUILT_IN_FORGE_API_URL=REPLACE
-VITE_FRONTEND_FORGE_API_KEY=REPLACE
-VITE_FRONTEND_FORGE_API_URL=REPLACE
+# ── Forge (Manus platform — left blank, not applicable on Hetzner)
+BUILT_IN_FORGE_API_KEY=
+BUILT_IN_FORGE_API_URL=https://forge.manus.ai
+VITE_FRONTEND_FORGE_API_KEY=
+VITE_FRONTEND_FORGE_API_URL=https://forge.manus.ai
 
 # ── Auth / Security ─────────────────────────────────────────────
-JWT_SECRET=REPLACE
-CM2_ADMIN_PASSCODE=REPLACE
-OAUTH_SERVER_URL=REPLACE
-VITE_OAUTH_PORTAL_URL=REPLACE
-OWNER_NAME=REPLACE
-OWNER_OPEN_ID=REPLACE
+JWT_SECRET=PATCH_JWT
+CM2_ADMIN_PASSCODE=cm2london
+OAUTH_SERVER_URL=
+VITE_OAUTH_PORTAL_URL=
+OWNER_NAME=Julian Noble
+OWNER_OPEN_ID=
 
-# ── Database ────────────────────────────────────────────────────
-DATABASE_URL=REPLACE
+# ── Database (local PostgreSQL — created by setup in Step 4) ────
+DATABASE_URL=postgresql://cm2:cm2secure2026@localhost:5432/cm2db
 
 # ── Email: SendGrid ─────────────────────────────────────────────
-SENDGRID_API_KEY=REPLACE
+SENDGRID_API_KEY=PATCH_SENDGRID
 
 # ── Email: SMTP ─────────────────────────────────────────────────
-SMTP_HOST=REPLACE
+SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=REPLACE
-SMTP_PASS=REPLACE
-SMTP_FROM=REPLACE
-SMTP_TO=REPLACE
+SMTP_USER=founder@thecm2.com
+SMTP_PASS=PATCH_SMTP_PASS
+SMTP_FROM=invest@thecm2.com
+SMTP_TO=invest@thecm2.com
 
 # ── Email: Gmail (agent mailer) ─────────────────────────────────
-GMAIL_USER=REPLACE
-GMAIL_FROM=REPLACE
-GMAIL_APP_PASSWORD=REPLACE
+GMAIL_USER=founder@thecm2.com
+GMAIL_FROM=invest@thecm2.com
+GMAIL_APP_PASSWORD=PATCH_GMAIL_PASS
 
 # ── LinkedIn ────────────────────────────────────────────────────
-LINKEDIN_CLIENT_ID=REPLACE
-LINKEDIN_CLIENT_SECRET=REPLACE
-LINKEDIN_ACCESS_TOKEN=REPLACE
-LINKEDIN_PERSON_URN=REPLACE
+LINKEDIN_CLIENT_ID=78ez1im1ndiv5l
+LINKEDIN_CLIENT_SECRET=PATCH_LINKEDIN_SECRET
+LINKEDIN_ACCESS_TOKEN=PATCH_LINKEDIN_TOKEN
+LINKEDIN_PERSON_URN=urn:li:person:KoPjUzUF-H
 
 # ── Analytics / Tracking ────────────────────────────────────────
-VITE_ANALYTICS_ENDPOINT=REPLACE
-VITE_ANALYTICS_WEBSITE_ID=REPLACE
-VITE_GA4_MEASUREMENT_ID=REPLACE
-VITE_META_PIXEL_ID=REPLACE
+VITE_ANALYTICS_ENDPOINT=
+VITE_ANALYTICS_WEBSITE_ID=
+VITE_GA4_MEASUREMENT_ID=G-M4VC6MX8Y3
+VITE_META_PIXEL_ID=London@2026#
 
 # ── App Identity ────────────────────────────────────────────────
-VITE_APP_ID=REPLACE
-VITE_APP_TITLE=REPLACE
-VITE_APP_LOGO=REPLACE
+VITE_APP_ID=
+VITE_APP_TITLE=CM2
+VITE_APP_LOGO=
 
 # ── Outreach Control ────────────────────────────────────────────
 OUTREACH_PAUSED=false
@@ -237,9 +246,7 @@ fi
 chown cm2:cm2 $APP_DIR/real-estate-agents/.env 2>/dev/null || true
 chown cm2:cm2 $APP_DIR/cm2-website/.env 2>/dev/null || true
 
-warn "ACTION NEEDED: Edit .env files and replace all REPLACE_WITH_REAL_* values"
-warn "  nano $APP_DIR/real-estate-agents/.env"
-warn "  nano $APP_DIR/cm2-website/.env"
+warn "Run patch-env.sh next to inject real API keys (PATCH_ tokens remain until then)"
 
 # ════════════════════════════════════════════════════════════════
 step "STEP 11 — Build & DB migrate (cm2-website)"

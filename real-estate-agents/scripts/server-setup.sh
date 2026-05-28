@@ -49,16 +49,16 @@ step "STEP 4 — System packages (nginx, certbot, chromium, git)"
 # ════════════════════════════════════════════════════════════════
 apt-get install -y nginx certbot python3-certbot-nginx \
   git curl wget unzip \
-  postgresql postgresql-client \
+  mysql-server mysql-client \
   chromium-browser xvfb -qq
 
-# ── PostgreSQL: create app database ────────────────────────────
-systemctl enable postgresql
-systemctl start postgresql
-sudo -u postgres psql -c "CREATE USER cm2 WITH PASSWORD 'cm2secure2026';" 2>/dev/null || true
-sudo -u postgres psql -c "CREATE DATABASE cm2db OWNER cm2;"               2>/dev/null || true
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE cm2db TO cm2;" 2>/dev/null || true
-ok "PostgreSQL: cm2db ready (user=cm2 pass=cm2secure2026 port=5432)"
+# ── MySQL: create app database ──────────────────────────────────
+systemctl enable mysql
+systemctl start mysql
+mysql -e "CREATE DATABASE IF NOT EXISTS cm2db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || true
+mysql -e "CREATE USER IF NOT EXISTS 'cm2'@'127.0.0.1' IDENTIFIED BY 'cm2secure2026';" 2>/dev/null || true
+mysql -e "GRANT ALL PRIVILEGES ON cm2db.* TO 'cm2'@'127.0.0.1'; FLUSH PRIVILEGES;" 2>/dev/null || true
+ok "MySQL: cm2db ready (user=cm2 pass=cm2secure2026 port=3306)"
 
 CHROMIUM=$(which chromium-browser 2>/dev/null || which chromium 2>/dev/null || echo "NOT FOUND")
 ok "Chromium: $CHROMIUM"
@@ -184,22 +184,23 @@ ANTHROPIC_API_KEY=PATCH_ANTHROPIC
 ELEVENLABS_API_KEY=PATCH_ELEVENLABS
 ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
 
-# ── Forge (Manus platform — left blank, not applicable on Hetzner)
-BUILT_IN_FORGE_API_KEY=
-BUILT_IN_FORGE_API_URL=https://forge.manus.ai
-VITE_FRONTEND_FORGE_API_KEY=
-VITE_FRONTEND_FORGE_API_URL=https://forge.manus.ai
+# ── Forge (Manus platform APIs) ─────────────────────────────────
+BUILT_IN_FORGE_API_KEY=PATCH_FORGE_KEY
+BUILT_IN_FORGE_API_URL=https://api.manus.im
+VITE_FRONTEND_FORGE_API_KEY=PATCH_FORGE_VITE_KEY
+VITE_FRONTEND_FORGE_API_URL=https://api.manus.im
 
 # ── Auth / Security ─────────────────────────────────────────────
 JWT_SECRET=PATCH_JWT
 CM2_ADMIN_PASSCODE=cm2london
-OAUTH_SERVER_URL=
-VITE_OAUTH_PORTAL_URL=
+OAUTH_SERVER_URL=https://api.manus.im
+VITE_OAUTH_PORTAL_URL=https://manus.im/oauth
 OWNER_NAME=Julian Noble
-OWNER_OPEN_ID=
+OWNER_OPEN_ID=PATCH_OWNER_OPEN_ID
+VITE_APP_ID=PATCH_VITE_APP_ID
 
-# ── Database (local PostgreSQL — created by setup in Step 4) ────
-DATABASE_URL=postgresql://cm2:cm2secure2026@localhost:5432/cm2db
+# ── Database (local MySQL — created by setup in Step 4) ─────────
+DATABASE_URL=mysql://cm2:cm2secure2026@127.0.0.1:3306/cm2db
 
 # ── Email: SendGrid ─────────────────────────────────────────────
 SENDGRID_API_KEY=PATCH_SENDGRID
@@ -230,9 +231,8 @@ VITE_GA4_MEASUREMENT_ID=G-M4VC6MX8Y3
 VITE_META_PIXEL_ID=London@2026#
 
 # ── App Identity ────────────────────────────────────────────────
-VITE_APP_ID=
-VITE_APP_TITLE=CM2
-VITE_APP_LOGO=
+VITE_APP_TITLE=Square Centimetre (CM2)
+VITE_APP_LOGO=https://d2xsxph8kpxj0f.cloudfront.net/310419663031253658/68KcWAaMsChVyE7UijVTrv/cm2-logo-transparent_3206076e.png
 
 # ── Outreach Control ────────────────────────────────────────────
 OUTREACH_PAUSED=false

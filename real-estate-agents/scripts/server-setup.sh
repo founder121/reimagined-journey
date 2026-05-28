@@ -140,6 +140,18 @@ su - cm2 -c "
 ok "Repos ready"
 
 # ════════════════════════════════════════════════════════════════
+step "STEP 8b — Apply Manus → password auth patch"
+# ════════════════════════════════════════════════════════════════
+PATCH_SCRIPT="$APP_DIR/reimagined-journey/real-estate-agents/scripts/apply-auth-patch.sh"
+if [ -f "$PATCH_SCRIPT" ]; then
+  chmod +x "$PATCH_SCRIPT"
+  bash "$PATCH_SCRIPT" "$APP_DIR/cm2-website"
+  ok "Auth patch applied"
+else
+  warn "Patch script not found at $PATCH_SCRIPT — skipping"
+fi
+
+# ════════════════════════════════════════════════════════════════
 step "STEP 9 — Install dependencies"
 # ════════════════════════════════════════════════════════════════
 su - cm2 -c "
@@ -192,6 +204,7 @@ VITE_FRONTEND_FORGE_API_URL=https://api.manus.im
 
 # ── Auth / Security ─────────────────────────────────────────────
 JWT_SECRET=PATCH_JWT
+ADMIN_PASSWORD=cm2julian2026
 CM2_ADMIN_PASSCODE=cm2london
 OAUTH_SERVER_URL=https://api.manus.im
 VITE_OAUTH_PORTAL_URL=https://manus.im/oauth

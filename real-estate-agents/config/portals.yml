@@ -1,0 +1,343 @@
+# ============================================================
+# Square Centimeter Ltd — Property Portal Configuration
+# ============================================================
+# Controls agent1-crawler.js (Property Scout).
+#
+# URL tokens available in searchPath:
+#   {locationId}  – portal-specific area identifier (per area entry)
+#   {minPrice}    – minimum price filter (£)
+#   {maxPrice}    – maximum price filter (£)
+#   {offset}      – pagination offset (results already seen)
+#   {page}        – 1-based page number
+#
+# Page style:
+#   offset  – portal paginates via index/offset query param (e.g. Rightmove)
+#   number  – portal paginates via /page-N or ?page=N path (e.g. Zoopla)
+#
+# jsRendered: true forces the agent-browser fallback for that portal.
+# Selectors may need updating as portal markup changes — log the date
+# of last validation in the comment next to each selector block.
+# ============================================================
+
+portals:
+
+  # ──────────────────────────────────────────────────────────
+  # Rightmove
+  # Largest UK portal. Paginates via index= (24 results/page).
+  # locationIdentifier uses OUTCODE^{id} for postcode districts.
+  # IDs below validated Q1 2025 — re-check if searches return 0.
+  # ──────────────────────────────────────────────────────────
+  rightmove:
+    enabled: true
+    baseUrl: "https://www.rightmove.co.uk"
+    searchPath: "/property-for-sale/find.html?locationIdentifier={locationId}&minPrice={minPrice}&maxPrice={maxPrice}&numberOfPropertiesPerPage=24&index={offset}&sortType=2&propertyTypes=&includeSSTC=false"
+    pageParamStyle: offset
+    resultsPerPage: 24
+    rateLimit: 1.2          # slightly above 1 req/s for safety
+    maxPages: 10
+    jsRendered: false       # Rightmove serves SSR HTML — axios sufficient
+    userAgent: "SquareCentimeterResearchBot/1.0 (+https://squarecentimeter.co.uk/bot)"
+    respectRobots: true
+    timeout: 30000
+    retries: 2
+    retryDelay: 6.0
+    defaultMinPrice: 500000
+    defaultMaxPrice: ""
+    # Selectors validated Q1 2025
+    selectors:
+      listingCard:    ".l-searchResult"
+      address:        ".propertyCard-address"
+      price:          ".propertyCard-priceValue"
+      tenure:         ".propertyCard-tag"
+      beds:           "[class*='bedrooms']"
+      sqft:           ".property-information li:nth-child(3)"
+      daysOnMarket:   ".propertyCard-branchSummary-addedOrReduced"
+      priceReduced:   ".propertyCard-priceHistory"
+      developer:      ".propertyCard-branchSummary-details"
+      listingUrl:     ".propertyCard-link"
+      epcRating:      ".propertyCard-epc"
+    # PCL/POL areas with their Rightmove OUTCODE identifiers
+    areas:
+      - name: "Belgravia & Pimlico"
+        locationId: "OUTCODE%5E1036"    # SW1
+        postcodePrefix: "SW1"
+        zone: PCL
+      - name: "Chelsea"
+        locationId: "OUTCODE%5E1042"    # SW3
+        postcodePrefix: "SW3"
+        zone: PCL
+      - name: "South Kensington & Gloucester Rd"
+        locationId: "OUTCODE%5E1046"    # SW7
+        postcodePrefix: "SW7"
+        zone: PCL
+      - name: "Chelsea Harbour & World's End"
+        locationId: "OUTCODE%5E1049"    # SW10
+        postcodePrefix: "SW10"
+        zone: PCL
+      - name: "Mayfair & Marylebone"
+        locationId: "OUTCODE%5E1074"    # W1
+        postcodePrefix: "W1"
+        zone: PCL
+      - name: "Kensington"
+        locationId: "OUTCODE%5E1081"    # W8
+        postcodePrefix: "W8"
+        zone: PCL
+      - name: "Covent Garden & Strand"
+        locationId: "OUTCODE%5E1095"    # WC2
+        postcodePrefix: "WC2"
+        zone: PCL
+      - name: "Clerkenwell & Farringdon"
+        locationId: "OUTCODE%5E1014"    # EC1
+        postcodePrefix: "EC1"
+        zone: PCL
+      - name: "Wapping & St Katharine Docks"
+        locationId: "OUTCODE%5E1019"    # E1W
+        postcodePrefix: "E1W"
+        zone: PCL
+      - name: "Nine Elms & Battersea"
+        locationId: "OUTCODE%5E1043"    # SW8
+        postcodePrefix: "SW8"
+        zone: EMERGING
+      - name: "Battersea & Clapham Junction"
+        locationId: "OUTCODE%5E1044"    # SW11
+        postcodePrefix: "SW11"
+        zone: POL
+      - name: "Notting Hill & Ladbroke Grove"
+        locationId: "OUTCODE%5E1078"    # W11
+        postcodePrefix: "W11"
+        zone: POL
+
+  # ──────────────────────────────────────────────────────────
+  # Zoopla
+  # Paginates via ?pn={page}. Good complement to Rightmove.
+  # Some listings exclusive to Zoopla (OnTheMarket-only agents
+  # excluded from Rightmove).
+  # ──────────────────────────────────────────────────────────
+  zoopla:
+    enabled: true
+    baseUrl: "https://www.zoopla.co.uk"
+    searchPath: "/for-sale/property/london/?price_min={minPrice}&price_max={maxPrice}&q={locationId}&results_sort=newest_listings&search_source=refine&pn={page}"
+    pageParamStyle: number
+    resultsPerPage: 25
+    rateLimit: 1.5
+    maxPages: 8
+    jsRendered: false
+    userAgent: "SquareCentimeterResearchBot/1.0 (+https://squarecentimeter.co.uk/bot)"
+    respectRobots: true
+    timeout: 30000
+    retries: 2
+    retryDelay: 6.0
+    defaultMinPrice: 500000
+    defaultMaxPrice: ""
+    # Selectors validated Q1 2025
+    selectors:
+      listingCard:    "[data-testid='search-result']"
+      address:        "[data-testid='listing-description']"
+      price:          "[data-testid='listing-price']"
+      beds:           "[data-testid='beds-label']"
+      baths:          "[data-testid='baths-label']"
+      sqft:           "[data-testid='floorarea-label']"
+      daysOnMarket:   "[data-testid='date-published']"
+      listingUrl:     "[data-testid='listing-details-link']"
+      developer:      "[data-testid='agent-name']"
+    areas:
+      - name: "SW1"
+        locationId: "sw1"
+        zone: PCL
+      - name: "SW3"
+        locationId: "sw3"
+        zone: PCL
+      - name: "SW7"
+        locationId: "sw7"
+        zone: PCL
+      - name: "W1"
+        locationId: "w1"
+        zone: PCL
+      - name: "W8"
+        locationId: "w8"
+        zone: PCL
+      - name: "SW11"
+        locationId: "sw11"
+        zone: POL
+      - name: "W11"
+        locationId: "w11"
+        zone: POL
+
+  # ──────────────────────────────────────────────────────────
+  # OnTheMarket
+  # Independent portal — often has exclusive new instructions
+  # from London agents before they appear on Rightmove/Zoopla.
+  # ──────────────────────────────────────────────────────────
+  onthemarket:
+    enabled: true
+    baseUrl: "https://www.onthemarket.com"
+    searchPath: "/for-sale/property/{locationId}/?min-price={minPrice}&max-price={maxPrice}&page={page}"
+    pageParamStyle: number
+    resultsPerPage: 24
+    rateLimit: 1.5
+    maxPages: 6
+    jsRendered: false
+    userAgent: "SquareCentimeterResearchBot/1.0 (+https://squarecentimeter.co.uk/bot)"
+    respectRobots: true
+    timeout: 30000
+    retries: 2
+    retryDelay: 7.0
+    defaultMinPrice: 500000
+    defaultMaxPrice: ""
+    selectors:
+      listingCard:    "li.otm-PropertyCardListItem"
+      address:        ".property-title"
+      price:          ".price"
+      beds:           ".bedrooms"
+      sqft:           ".size"
+      daysOnMarket:   ".listing-freshness"
+      listingUrl:     "a.otm-PropertyCardLink"
+      developer:      ".agent-details"
+    areas:
+      - name: "Chelsea"
+        locationId: "chelsea--london"
+        zone: PCL
+      - name: "Belgravia"
+        locationId: "belgravia--london"
+        zone: PCL
+      - name: "Mayfair"
+        locationId: "mayfair--london"
+        zone: PCL
+      - name: "Kensington"
+        locationId: "kensington--london"
+        zone: PCL
+      - name: "Notting Hill"
+        locationId: "notting-hill--london"
+        zone: POL
+      - name: "Battersea"
+        locationId: "battersea--london"
+        zone: EMERGING
+
+  # ──────────────────────────────────────────────────────────
+  # Knight Frank
+  # Premium agent site — many PCL exclusives.
+  # JS-heavy: requires agent-browser fallback.
+  # ──────────────────────────────────────────────────────────
+  knightfrank:
+    enabled: true
+    baseUrl: "https://www.knightfrank.co.uk"
+    searchPath: "/residential/property-for-sale/great-britain/{locationId}/?priceMin={minPrice}&priceMax={maxPrice}&page={page}"
+    pageParamStyle: number
+    resultsPerPage: 20
+    rateLimit: 2.0
+    maxPages: 5
+    jsRendered: true        # requires agent-browser
+    userAgent: "SquareCentimeterResearchBot/1.0 (+https://squarecentimeter.co.uk/bot)"
+    respectRobots: true
+    timeout: 45000
+    retries: 1
+    retryDelay: 10.0
+    defaultMinPrice: 500000
+    defaultMaxPrice: ""
+    selectors:
+      listingCard:    ".listing-card"
+      address:        ".listing-card__address"
+      price:          ".listing-card__price"
+      beds:           ".listing-card__beds"
+      sqft:           ".listing-card__sqft"
+      tenure:         ".listing-card__tenure"
+      listingUrl:     "a.listing-card__link"
+      developer:      ".listing-card__agent"
+    areas:
+      - name: "Chelsea"
+        locationId: "chelsea"
+        zone: PCL
+      - name: "Belgravia"
+        locationId: "belgravia"
+        zone: PCL
+      - name: "Mayfair"
+        locationId: "mayfair"
+        zone: PCL
+      - name: "Kensington"
+        locationId: "kensington"
+        zone: PCL
+      - name: "Notting Hill"
+        locationId: "notting-hill"
+        zone: POL
+
+  # ──────────────────────────────────────────────────────────
+  # Savills
+  # Premium agent — strong PCL and new homes coverage.
+  # ──────────────────────────────────────────────────────────
+  savills:
+    enabled: false           # enable after verifying robots.txt
+    baseUrl: "https://search.savills.com"
+    searchPath: "/en-gb/list?SearchFlow=residential-buy&Location={locationId}&Postcodes=&Currency=GBP&PriceMin={minPrice}&PriceMax={maxPrice}&PriceUnit=LocalCurrency&ListingType=1&Page={page}"
+    pageParamStyle: number
+    resultsPerPage: 12
+    rateLimit: 2.5
+    maxPages: 4
+    jsRendered: true
+    userAgent: "SquareCentimeterResearchBot/1.0 (+https://squarecentimeter.co.uk/bot)"
+    respectRobots: true
+    timeout: 45000
+    retries: 1
+    retryDelay: 10.0
+    defaultMinPrice: 500000
+    defaultMaxPrice: ""
+    selectors:
+      listingCard:    ".listing-card"
+      address:        ".listing-card-address"
+      price:          ".listing-price"
+      beds:           ".listing-beds"
+      sqft:           ".listing-sqft"
+      listingUrl:     "a.listing-card-link"
+    areas:
+      - name: "Chelsea, London"
+        locationId: "Chelsea%2C+London"
+        zone: PCL
+      - name: "Mayfair, London"
+        locationId: "Mayfair%2C+London"
+        zone: PCL
+
+  # ──────────────────────────────────────────────────────────
+  # JLL Residential (Jones Lang LaSalle)
+  # Strong in new-build and international buyer market.
+  # ──────────────────────────────────────────────────────────
+  jll:
+    enabled: false           # enable after verifying robots.txt
+    baseUrl: "https://www.jll.co.uk"
+    searchPath: "/en/property-search?f.transaction_type=buy&f.city=London&f.price.min={minPrice}&f.price.max={maxPrice}&page={page}"
+    pageParamStyle: number
+    resultsPerPage: 12
+    rateLimit: 2.0
+    maxPages: 4
+    jsRendered: true
+    userAgent: "SquareCentimeterResearchBot/1.0 (+https://squarecentimeter.co.uk/bot)"
+    respectRobots: true
+    timeout: 45000
+    retries: 1
+    retryDelay: 10.0
+    defaultMinPrice: 500000
+    defaultMaxPrice: ""
+    selectors:
+      listingCard:    ".property-card"
+      address:        ".property-card__address"
+      price:          ".property-card__price"
+      beds:           ".property-card__beds"
+      listingUrl:     "a.property-card__link"
+    areas:
+      - name: "London"
+        locationId: "London"
+        zone: POL
+
+# ============================================================
+# Global crawler defaults
+# ============================================================
+defaults:
+  rateLimit: 1.0            # max 1 req/s per domain
+  maxPages: 5
+  resultsPerPage: 24
+  respectRobots: true
+  jsRendered: false
+  timeout: 30000
+  retries: 2
+  retryDelay: 6.0
+  defaultMinPrice: 500000
+  defaultMaxPrice: ""
+  userAgent: "SquareCentimeterResearchBot/1.0 (+https://squarecentimeter.co.uk/bot)"

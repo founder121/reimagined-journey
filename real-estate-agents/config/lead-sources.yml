@@ -1,0 +1,365 @@
+# ============================================================
+# Square Centimeter Ltd — Investor Lead Source Configuration
+# ============================================================
+# Controls agent2-leads.js (Investor Lead Finder).
+#
+# Lead types:
+#   cash_buyer      – Recent high-value cash purchasers (HMLR data)
+#   developer       – Property development companies (Companies House)
+#   hnw_investor    – High-net-worth individuals with stated London interest
+#   family_office   – Family offices and wealth management vehicles
+#   motivated_vendor – Vendors signalling urgency (estate sales, corporate disposals)
+#   expat           – Overseas buyers / non-dom individuals
+#
+# All sources must be publicly accessible without authentication
+# (or via a documented free/registered public API).
+# Public data only — no private records, no scraping gated content.
+# ============================================================
+
+# ── Scoring weights ────────────────────────────────────────────────────────
+# These mirror CLAUDE.md § Lead Scoring Weights
+lead_score_weights:
+  investment_intent_signal: 0.40   # clear intent to acquire London property
+  capital_capacity:         0.25   # budget aligned with prime market (£500k+)
+  accessibility:            0.20   # contactable via public profile or warm intro
+  strategic_fit:            0.15   # aligns with SC advisory focus
+
+# ── Score band definitions (1–10 per dimension) ────────────────────────────
+score_bands:
+  investment_intent_signal:
+    10: "Active acquirer — recent HMLR transaction or stated acquisition programme"
+    8:  "Seeking advisory — mentioned London property investment publicly"
+    6:  "Attended property investment conference or event"
+    4:  "General HNWI with no explicit London property signal"
+    2:  "Tangential — property adjacent but no direct London intent"
+  capital_capacity:
+    10: "Verified transaction >£5m (HMLR or press)"
+    8:  "Transaction or stated budget £2m–£5m"
+    6:  "Transaction or stated budget £1m–£2m"
+    4:  "Transaction or stated budget £500k–£1m"
+    2:  "Budget unclear but profile suggests capacity"
+  accessibility:
+    10: "Direct contact details in public filing or press"
+    8:  "Active LinkedIn with contact option; company contact known"
+    6:  "Company contact page; named director reachable via Companies House"
+    4:  "Named in public record — no direct contact"
+    2:  "Anonymous or indirect signal only"
+  strategic_fit:
+    10: "Non-dom / overseas family office — core SC client profile"
+    8:  "International developer or co-investment seeker"
+    6:  "UK-based HNWI acquiring PCL / POL"
+    4:  "Broader London investor; zone unclear"
+    2:  "Residential investor outside SC focus areas"
+
+sources:
+
+  # ──────────────────────────────────────────────────────────
+  # HM Land Registry — Price Paid Data
+  # Free public API. Returns residential transactions above
+  # a price threshold in specified postcodes.
+  # Useful for: identifying recent cash buyers (no concurrent
+  # mortgage registration = strong cash buyer signal).
+  # ──────────────────────────────────────────────────────────
+  land_registry_price_paid:
+    enabled: true
+    type: cash_buyer
+    description: "HMLR Price Paid — public residential transactions, London PCL/POL"
+    apiUrl: "https://landregistry.data.gov.uk/data/ppi/transaction-record.json"
+    rateLimit: 1.0
+    maxRecords: 500
+    dedupeKey: "transactionId"     # unique per HMLR transaction
+    params:
+      propertyType: "D,S,T,F"        # detached, semi, terraced, flat
+      estateType: "F"                # freehold only first pass (override per run)
+      minPrice: 500000
+      postcodes:                     # PCL/POL outcode list
+        - SW1
+        - SW3
+        - SW7
+        - SW10
+        - W1
+        - W8
+        - WC2
+        - EC1
+        - E1W
+        - SW11
+        - W11
+        - SW8
+      lookbackDays: 180
+    outputFile: "data/leads/raw/leads-land-registry-{date}.csv"
+    fields:
+      - transactionId
+      - price
+      - dateOfTransfer
+      - postcode
+      - propertyType
+      - newBuildFlag
+      - estateType
+      - paon          # primary addressable object name (house name/number)
+      - saon          # secondary (flat/unit)
+      - street
+      - town
+      - district
+      - county
+      - ppdCategory   # A=standard, B=additional (e.g. buy-to-let)
+
+  # ──────────────────────────────────────────────────────────
+  # Companies House — Property & Investment Companies
+  # Free public API (requires free API key registration).
+  # Identifies: SPV/holding companies for London property,
+  # overseas-registered companies with London addresses,
+  # recently incorporated property development companies.
+  # ──────────────────────────────────────────────────────────
+  companies_house:
+    enabled: true
+    type: developer
+    description: "Companies House — property holding companies, SPVs, developers"
+    apiUrl: "https://api.company-information.service.gov.uk"
+    apiKeyEnvVar: "COMPANIES_HOUSE_API_KEY"
+    rateLimit: 0.5                   # CH rate limit: 600 req/5min
+    maxRecords: 200
+    searchTerms:
+      - "prime London property"
+      - "London residential investment"
+      - "PCL property"
+      - "London real estate fund"
+      - "Chelsea properties"
+      - "Mayfair properties"
+    filters:
+      status: "active"
+      companyType:
+        - "ltd"
+        - "private-unlimited"
+        - "llp"
+      incorporatedAfter: "2018-01-01"
+      sicCodes:
+        - "68100"   # buying/selling own real estate
+        - "68209"   # other letting/operating
+        - "68320"   # management of real estate on a fee or contract basis
+        - "64205"   # activities of financial holding companies
+    outputFile: "data/leads/raw/leads-companies-house-{date}.csv"
+    fields:
+      - company_name
+      - company_number
+      - date_of_creation
+      - company_type
+      - registered_office_address
+      - sic_codes
+      - nationality_of_control  # persons with significant control
+      - psc_nationality
+
+  # ──────────────────────────────────────────────────────────
+  # LinkedIn Public Search
+  # Public profile search only — no authenticated scraping.
+  # Rate limit: conservative, with jitter.
+  # Targets: property investors, family office principals,
+  # wealth managers, overseas buyers posting London content.
+  # ──────────────────────────────────────────────────────────
+  linkedin_public:
+    enabled: true
+    type: hnw_investor
+    description: "LinkedIn public search — HNW investors with London property interest"
+    baseUrl: "https://www.linkedin.com"
+    searchPath: "/search/results/people/?keywords={query}&origin=GLOBAL_SEARCH_HEADER"
+    rateLimit: 3.0                   # LinkedIn is very rate-limit sensitive
+    maxRecords: 50
+    jsRendered: true                 # requires agent-browser
+    searchQueries:
+      - "prime London property investor"
+      - "family office London real estate"
+      - "luxury property London investor"
+      - "London property portfolio"
+      - "PCL residential investor"
+    selectors:
+      card:     ".reusable-search__result-container"
+      name:     ".entity-result__title-text"
+      headline: ".entity-result__primary-subtitle"
+      location: ".entity-result__secondary-subtitle"
+      url:      "a.app-aware-link"
+    outputFile: "data/leads/raw/leads-linkedin-{date}.csv"
+    fields:
+      - name
+      - headline
+      - location
+      - linkedinUrl
+      - inferredNationality  # parsed from location/name signals, never stored as fact
+      - source: "linkedin-public"
+
+  # ──────────────────────────────────────────────────────────
+  # Property Week / Estates Gazette — Deal Announcements
+  # Public news articles mentioning acquisitions, launches,
+  # investor profiles in the London market.
+  # ──────────────────────────────────────────────────────────
+  property_press:
+    enabled: true
+    type: hnw_investor
+    description: "Property press — named investors in public deal announcements"
+    rateLimit: 2.0
+    maxRecords: 100
+    jsRendered: false
+    sources:
+      - name: "Property Week"
+        baseUrl: "https://www.propertyweek.com"
+        searchPath: "/news?q={query}&type=news"
+        selectors:
+          article: "article.search-result"
+          headline: "h3.search-result__title"
+          url: "a.search-result__link"
+          snippet: ".search-result__summary"
+      - name: "CoStar UK"
+        baseUrl: "https://www.costar.com"
+        searchPath: "/news?region=uk&q={query}"
+        selectors:
+          article: ".news-article-item"
+          headline: ".news-article-item__title"
+          url: "a.news-article-item__link"
+    searchQueries:
+      - "prime London residential acquisition"
+      - "London property investment family office"
+      - "luxury London apartment buyer"
+    outputFile: "data/leads/raw/leads-press-{date}.csv"
+    fields:
+      - name
+      - context
+      - articleUrl
+      - articleDate
+      - source
+
+  # ──────────────────────────────────────────────────────────
+  # Expat & Non-Dom Community Forums
+  # Public posts on property forums where international buyers
+  # ask about London acquisitions (public threads only).
+  # ──────────────────────────────────────────────────────────
+  expat_forums:
+    enabled: false          # enable selectively — high false-positive rate
+    type: expat
+    description: "Public expat forums — overseas buyers researching London property"
+    rateLimit: 2.0
+    maxRecords: 50
+    jsRendered: false
+    sources:
+      - name: "British Expats Forum"
+        baseUrl: "https://www.britishexpats.com"
+        searchPath: "/forum/search.php?q={query}&forums[]=25"  # Property forum
+        selectors:
+          post:    ".postcontainer"
+          author:  ".username"
+          content: ".post-content"
+          url:     "a.postcounter"
+    searchQueries:
+      - "buy London apartment"
+      - "prime London property non-dom"
+    outputFile: "data/leads/raw/leads-expat-{date}.csv"
+    fields:
+      - username
+      - postSnippet
+      - postUrl
+      - source: "expat-forum"
+
+  # ──────────────────────────────────────────────────────────
+  # HMLR PSC Register (Persons with Significant Control)
+  # Cross-references Companies House PSC data to surface
+  # overseas principals controlling UK property vehicles.
+  # ──────────────────────────────────────────────────────────
+  psc_overseas:
+    enabled: true
+    type: family_office
+    description: "PSC Register — overseas persons controlling London property SPVs"
+    apiUrl: "https://api.company-information.service.gov.uk/persons-with-significant-control-statements"
+    apiKeyEnvVar: "COMPANIES_HOUSE_API_KEY"
+    rateLimit: 0.5
+    maxRecords: 100
+    filters:
+      nationality:
+        - "Saudi Arabian"
+        - "Emirati"
+        - "Qatari"
+        - "Kuwaiti"
+        - "Chinese"
+        - "Hong Kong"
+        - "Singaporean"
+        - "Malaysian"
+        - "Russian"
+        - "Swiss"
+        - "American"
+    outputFile: "data/leads/raw/leads-psc-{date}.csv"
+    fields:
+      - name
+      - nationality
+      - countryOfResidence
+      - companyName
+      - companyNumber
+      - naturesOfControl
+      - source: "companies-house-psc"
+
+  # ──────────────────────────────────────────────────────────
+  # HMLR UK-Wide — Price Paid, 4 parallel queries
+  # No date filter; maximum volume; UK-wide + PCL focus.
+  # Processed by fetchHMLRUKWide() in agent2-leads.js which
+  # runs queries A (high-value UK-wide), B (PCL per-postcode),
+  # C (new builds), D (leasehold flats) via Promise.allSettled.
+  # ──────────────────────────────────────────────────────────
+  hmlr_uk_wide:
+    enabled: true
+    type: cash_buyer
+    description: "HMLR Price Paid — UK-wide, 4 parallel queries, no date filter, maximum volume"
+    apiUrl: "https://landregistry.data.gov.uk/data/ppi/transaction-record.json"
+    rateLimit: 1.0
+    maxRecords: 2000
+    dedupeKey: "transactionId"
+    queries:
+      A:
+        label: "high-value UK-wide"
+        params:
+          pricePaid-min: 500000
+          _view: basic
+          _pageSize: 100
+          _format: json
+          _output: none
+      B:
+        label: "PCL per-postcode (sequential)"
+        postcodes: [SW1, SW3, SW7, SW10, W1, W8, WC2, EC1, E1W]
+        params:
+          pricePaid-min: 500000
+          _view: basic
+          _pageSize: 100
+          _format: json
+          _output: none
+      C:
+        label: "new builds UK-wide"
+        params:
+          newBuild: "Y"
+          pricePaid-min: 300000
+          _view: basic
+          _pageSize: 100
+          _format: json
+          _output: none
+      D:
+        label: "leasehold flats UK-wide"
+        params:
+          propertyType: "F"
+          estateType: "L"
+          pricePaid-min: 400000
+          _view: basic
+          _pageSize: 100
+          _format: json
+          _output: none
+    outputFile: "data/leads/raw/leads-hmlr-uk-wide-{date}.csv"
+
+# ============================================================
+# Global lead-source defaults
+# ============================================================
+defaults:
+  rateLimit: 1.0
+  maxRecords: 100
+  timeout: 30000
+  retries: 2
+  retryDelay: 6.0
+  dedupeKey: "linkedinUrl"          # fallback; overridden per source
+  outputDir: "data/leads/raw"
+  alwaysInclude:
+    - capturedAt                    # ISO capture timestamp
+    - sourceUrl                     # exact URL parsed from
+    - agentVersion                  # semver string
+    - lead_score                    # weighted composite (1–10)
+    - status                        # new | contacted | responded | meeting_booked | converted | dead
